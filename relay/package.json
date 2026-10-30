@@ -1,0 +1,8 @@
+{
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "test": "node --test \"test/*.test.js\"",
+    "upload": "npx --yes esbuild@0.28.1 public/_worker.js/index.js --bundle --format=esm --outfile=upload/_worker.js && node -e \"const fs=require('fs');for(const f of fs.readdirSync('public'))if(f.endsWith('.html')||f.endsWith('.css'))fs.copyFileSync('public/'+f,'upload/'+f)\""
+  }
+}

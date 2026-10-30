@@ -1,0 +1,9 @@
+body{font-family:system-ui,sans-serif;max-width:32rem;margin:2rem auto;padding:0 1rem;line-height:1.45}
+code,pre{background:#f4f4f5;padding:.15rem .35rem;border-radius:4px}
+pre{padding:.75rem;overflow:auto;user-select:all;word-break:break-all}
+button{font:inherit;padding:.5rem 1rem;cursor:pointer}
+.warn{background:#fff7ed;border:1px solid #fdba74;padding:.75rem;border-radius:8px}
+.err{color:#b91c1c}
+.ok{color:#047857}
+.hidden{display:none}
+.cf-turnstile{margin:1rem 0}

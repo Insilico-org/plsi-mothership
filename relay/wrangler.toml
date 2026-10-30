@@ -1,0 +1,7 @@
+name = "plsi-mothership-relay"
+compatibility_date = "2026-10-21"
+pages_build_output_dir = "public"
+
+[[kv_namespaces]]
+binding = "RELAY_KV"
+id = "1bfa94fc6c96431482a659d33ccd64db"

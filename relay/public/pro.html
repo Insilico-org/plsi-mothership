@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="referrer" content="no-referrer" />
+  <title>Longevity Mothership professional access</title>
+  <link rel="stylesheet" href="/relay.css" />
+</head>
+<body>
+  <h1>Professional access</h1>
+  <p>A steward of the Longevity Mothership invited you as a physician or researcher. Confirm below to get your
+  professional key. It is shown <strong>once</strong>, on this page only; the link then stops working.</p>
+  <!--WIDGET-->
+  <p><button type="button" id="btn"<!--DISABLED-->>Confirm and get my key</button></p>
+  <p id="msg" class="err"></p>
+  <div id="keyBox" class="hidden">
+    <p class="ok">Your professional key (<span id="grant"></span>, valid until <span id="exp"></span>):</p>
+    <pre id="key"></pre>
+    <p>In Grok, add it with the secret card as <code>MOTHERSHIP_PROFESSIONAL_TOKEN</code>, then ask PLSI
+    "am I connected to the Mothership?". Don't paste it into a chat, an email or a document. If you lose it, ask the
+    steward for a new invite.</p>
+  </div>
+  <script>
+    const msg = document.getElementById('msg');
+    const btn = document.getElementById('btn');
+    const invite = location.hash.slice(1);
+    history.replaceState(null, '', location.pathname);
+    const USED = 'This invite was already used. If that was not you, tell the steward who invited you now, so that key is revoked.';
+    if (!invite) { msg.textContent = 'This page needs the full link from your invite email.'; btn.disabled = true; }
+    function reset() { btn.disabled = false; if (window.turnstile && window.turnstile.reset) window.turnstile.reset(); }
+    btn.addEventListener('click', async () => {
+      msg.textContent = '';
+      const el = document.querySelector('[name="cf-turnstile-response"]');
+      const token = el && el.value ? el.value : '';
+      if (!token) { msg.textContent = 'Complete the verification first.'; return; }
+      btn.disabled = true;
+      try {
+        const res = await fetch('/pro/claim', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ invite, turnstileToken: token }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (data.error === 'invite_already_used') { msg.textContent = USED; return; }
+        if (data.error === 'invalid_or_expired_invite') { msg.textContent = 'This invite has expired or is not valid. Ask the steward for a new one.'; return; }
+        if (!res.ok || !data.token) { msg.textContent = data.error || ('Failed (' + res.status + ')'); reset(); return; }
+        document.getElementById('key').textContent = data.token;
+        document.getElementById('grant').textContent = data.role + ': ' + data.scopes.join(', ');
+        document.getElementById('exp').textContent = new Date(data.exp * 1000).toISOString().slice(0, 10);
+        document.getElementById('keyBox').classList.remove('hidden');
+        btn.classList.add('hidden');
+      } catch (e) { msg.textContent = 'Network error'; reset(); }
+    });
+  </script>
+</body>
+</html>

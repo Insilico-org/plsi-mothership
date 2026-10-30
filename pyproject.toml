@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "plsi-mother"
+version = "0.1.0"
+description = "The Longevity Mothership toolbelt: intake, deletion, releases, catalog and the findings ledger."
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+drive = ["google-api-python-client", "google-auth"]
+
+[project.scripts]
+mother = "mother.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

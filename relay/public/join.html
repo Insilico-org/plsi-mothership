@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Join the Longevity Mothership</title>
+  <link rel="stylesheet" href="/relay.css" />
+</head>
+<body>
+  <h1>Join the Longevity Mothership</h1>
+  <p>Get an enrollment code and paste it into your PLSI chat. PLSI runs <code>plsi mothership join</code> with it and
+  keeps the install token on your computer; the token never appears on this page. A code works once and expires in
+  about 15 minutes.</p>
+  <!--WIDGET-->
+  <p><button type="button" id="btn"<!--DISABLED-->>Get enrollment code</button></p>
+  <p id="msg" class="err"></p>
+  <div id="codeBox" class="hidden">
+    <p class="ok">Your enrollment code:</p>
+    <pre id="code"></pre>
+    <p>Paste it into your PLSI chat now (<code>plsi mothership join --code &lt;code&gt;</code>).</p>
+  </div>
+  <script>
+    const msg = document.getElementById('msg');
+    const btn = document.getElementById('btn');
+    function reset() { btn.disabled = false; if (window.turnstile && window.turnstile.reset) window.turnstile.reset(); }
+    btn.addEventListener('click', async () => {
+      msg.textContent = '';
+      const el = document.querySelector('[name="cf-turnstile-response"]');
+      const token = el && el.value ? el.value : '';
+      if (!token) { msg.textContent = 'Complete the verification first.'; return; }
+      btn.disabled = true;
+      try {
+        const res = await fetch('/join/issue', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ turnstileToken: token }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.code) { msg.textContent = data.error || ('Failed (' + res.status + ')'); reset(); return; }
+        document.getElementById('code').textContent = data.code;
+        document.getElementById('codeBox').classList.remove('hidden');
+        btn.classList.add('hidden');
+      } catch (e) { msg.textContent = 'Network error'; reset(); }
+    });
+  </script>
+</body>
+</html>
