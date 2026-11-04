@@ -11,7 +11,7 @@ from collections.abc import Callable
 from typing import Any
 
 from mother.errors import violation
-from mother.vocab import CodeSystem, ContributionKind, Sex
+from mother.vocab import ClinicalStatus, CodeSystem, ContributionKind, Ethnicity, Sex, ValueStatus
 
 ID = re.compile(r"[a-z0-9][a-z0-9_.-]{0,63}")
 MONTH = re.compile(r"\d{4}-(0[1-9]|1[0-2])")
@@ -135,24 +135,40 @@ _id = _match(ID, "bad_id")
 _month = _match(MONTH, "bad_format")
 _unit = _match(UNIT, "bad_format")
 DOSE = _object({"value", "unit"}, {"value": _positive, "unit": _unit})  # stored only: releases and catalog ignore it
+
+
+def _count(v: Any, at: str) -> list[dict[str, str]]:
+    """How many values a mean covers: an integer of at least 1."""
+    return [] if isinstance(v, int) and not isinstance(v, bool) and v >= 1 else [violation(at, "bad_number")]
+
+
+def _series(v: Any, at: str) -> list[dict[str, str]]:
+    """Points of {t, value}, at most one per month: a month is the finest grain a contribution may carry."""
+    out = _list(_object({"t", "value"}, {"t": _month, "value": _num, "n": _count}))(v, at)
+    months = [p.get("t") for p in v if isinstance(p, dict)] if isinstance(v, list) else []
+    return out + [violation(f"{at}[{n}]", "repeat_month") for n, m in enumerate(months) if m in months[:n]]
+
+
 COORDINATE = _object(set(), {
-    "status": _id, "value": _num, "unit": _unit, "comparator": _one_of(COMPARATORS), "observed": _month,
-    "series": _list(_object({"t", "value"}, {"t": _month, "value": _num})),
-    "items": _list(_object({"code"}, {"code": _code, "clinical_status": _id, "dose": DOSE}))})
+    "status": _one_of(frozenset(ValueStatus)), "value": _num, "unit": _unit, "comparator": _one_of(COMPARATORS), "observed": _month,
+    "series": _series,
+    "items": _list(_object({"code"}, {"code": _code, "clinical_status": _one_of(frozenset(ClinicalStatus)), "dose": DOSE}))})
 STATE = _object({"map_id", "coordinates"}, {
     "map_id": _id, "map_version": _match(MAP_VERSION, "bad_format"), "map_hash": _match(HEX64, "bad_format"),
     "as_of": _month, "gaps": _list(_id), "coordinates": _keyed(COORDINATE)})
 EVENT = _object({"kind", "year", "basis", "code"}, {
     "kind": _id, "year": _year, "until": _year, "basis": _id, "code": _code, "value": _num, "unit": _unit,
-    "clinical_status": _id, "dose": DOSE})
+    "clinical_status": _one_of(frozenset(ClinicalStatus)), "dose": DOSE})
 SCORES = _object(set(), {"overall": _summary, "by_coordinate": _keyed(_summary)})
 SECTIONS = {ContributionKind.STATES: _list(STATE), ContributionKind.LIFE_EVENTS: _list(EVENT),
             ContributionKind.SCORES: SCORES}
-SUBJECT = _object(set(), {"sex": _one_of(frozenset(Sex)), "age_band": _one_of(AGE_BANDS)})
+SUBJECT = _object(set(), {"sex": _one_of(frozenset(Sex)), "age_band": _one_of(AGE_BANDS),
+                          "ethnicity": _one_of(frozenset(Ethnicity) - {Ethnicity.UNSPECIFIED})})
 # every field name above, for gate paths
 NAMES = frozenset({"map_id", "map_version", "map_hash", "as_of", "gaps", "coordinates", "status", "value", "unit",
-                   "comparator", "observed", "series", "t", "items", "code", "system", "clinical_status", "kind",
-                   "year", "until", "basis", "dose", "overall", "by_coordinate", "sex", "age_band", *SCORE_KEYS})
+                   "comparator", "observed", "series", "t", "n", "items", "code", "system", "clinical_status", "kind",
+                   "year", "until", "basis", "dose", "overall", "by_coordinate", "sex", "age_band", "ethnicity",
+                   *SCORE_KEYS})
 
 
 def violations(doc: dict[str, Any]) -> list[dict[str, str]]:

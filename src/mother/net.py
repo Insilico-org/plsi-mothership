@@ -31,6 +31,11 @@ def _key(path: str) -> str:
     return _env("MOTHER_RELAY_ADMIN_KEY", "run this from a steward's terminal (the bot never holds the admin key)")
 
 
+def relay() -> str:
+    """The relay base the Mother reads, named in a message so a wrong one cannot hide; no key is ever shown."""
+    return os.environ.get("MOTHER_RELAY_URL", "").strip().rstrip("/") or "the relay (MOTHER_RELAY_URL is not set)"
+
+
 def post(path: str, body: dict[str, Any]) -> dict[str, Any]:
     """POST `body` to `<MOTHER_RELAY_URL><path>` with the path's key; the parsed JSON reply."""
     url = _env("MOTHER_RELAY_URL").rstrip("/") + path

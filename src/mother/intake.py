@@ -51,7 +51,8 @@ def _take(ref: dict[str, Any]) -> dict[str, Any]:
             if exc.status != 404:
                 raise
     else:
-        raise Refused("the relay does not hold this body (already taken or expired)", code="REF_NOT_FOUND")
+        raise Refused(f"{net.relay()} does not hold this body (already taken, expired, or a relay that does not wake you)",
+                      code="REF_NOT_FOUND", hint="tell the stewards which relay you asked when no wake was taken before")
     body = parked.get("body")
     raw = body.encode("utf-8") if isinstance(body, str) else b""
     if len(raw) != ref["bytes"] or not hmac.compare_digest(hashlib.sha256(raw).hexdigest(), ref["sha256"]):
@@ -107,10 +108,14 @@ def _withdrawal(store: Store, doc: dict[str, Any], rid: str) -> dict[str, Any]:
     write_json(store, f"deletions/{rid}.json", {
         "receipt": rid, "at": clock.stamp(), "contributor_id_sha256": _pseudonym_hash(cid),
         "packages_deleted": len(packages)})
-    store.delete(f"intake/{cid}")
+    gone = store.delete(f"intake/{cid}")
     if idx.pop(cid, None) is not None:
         index.save(store, idx)
-    return {"status": ContributorStatus.DELETED.value, "packages_deleted": len(packages)}
+    out = {"status": ContributorStatus.DELETED.value, "packages_deleted": len(packages)}
+    if not gone:
+        audit.record(store, "deletion_trashed", rid)
+        out["trashed"] = True  # in the drive's trash until it is emptied (30 days at most): WIRE §6
+    return out
 
 
 def _taken(store: Store, id_: str) -> bool:

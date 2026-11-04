@@ -16,6 +16,10 @@ Follow persona.md. A withdrawal already in hand comes before notes and findings,
   proof, intake writes `deletions/<receipt>.json` first (hash of the pseudonym, `packages_deleted`), then deletes
   `intake/<contributor_id>/` and removes the index entry. The receipt is the tombstone. Releases built after that no
   longer contain the contributor; published releases are aggregates of at least `min_cell` people and are not rebuilt.
+- **`trashed: true` in the reply:** the service account could not delete for good (on a shared drive only a Manager
+  may), so the packages went to the drive's trash, which Drive empties after 30 days. The contributor's ACK says so.
+  Tell the stewards at once, in one message: a Manager of the shared drive should empty its trash now and make the
+  `mother` service account a Manager, so later deletions are final. Never call such a deletion complete.
 - A later `plsi_contribution` for a pseudonym that already has a deletion receipt is refused (`ALREADY_DELETED`) and
   stored nowhere. `stop` does not write that receipt; a contribution after `stop` means they re-joined.
 

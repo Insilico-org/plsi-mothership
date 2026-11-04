@@ -45,26 +45,31 @@ Bodies are JSON, not yet sealed. Sealing to a Mother public key is planned. The 
 
 | `kind` | Sender | Body fields (beyond `kind`, `schema_version`) |
 |---|---|---|
-| `plsi_contribution` | install | `contributor_id`, `consent_version`, `packed` ("YYYY-MM"), `kinds` [states, life_events, scores], `subject` {`sex`, `age_band`}, optional sections `states`, `life_events`, `scores` (shape below) |
+| `plsi_contribution` | install | `contributor_id`, `consent_version`, `packed` ("YYYY-MM"), `kinds` [states, life_events, scores], `subject` {`sex`, `age_band`, `ethnicity`?}, optional sections `states`, `life_events`, `scores` (shape below) |
 | `plsi_withdrawal` | install | `contributor_id`, `request` ("stop" \| "delete_all"), `proof` (= `s`, hex; **required** for delete_all, **absent** for stop) |
-| `plsi_research_note` | email only (§7), never the relay | `items` [{`claim`, `grade`, `evidence_class`, `sources` [{`kind`, `id`}], `falsified_by`, `next_step`}], `method` |
+| `plsi_research_note` | email only (§7), never the relay | `items` [{`claim`, `grade`, `evidence_class`, `sources` [{`kind`, `id`}], `falsified_by`, `next_step`; optional `question`, `topic` ("target" \| "repurposing" \| "method" \| "hallmark"), `support`, `against`, `risks` [{`source` (one of the item's `sources`), `finding`}], `limits` [text], `model_output` [{`model`, `finding`}]; each text 1-300 characters, each list 1-10 entries}], `method`; optional `report`: the compiled report in markdown, at most 40,000 characters; optional `files` [{`name`, `sha256`, optional `drive_id`}]: 1-20 data files (§7, Files) |
 | `plsi_registry_update` | install | `items` [{`kind` ("physician" \| "method"), `name`, `specialty`, `country`, `public_url`, `methods`, `credentials`, `source_urls`}] |
 | `plsi_preregistration` | professional (`findings:submit`) | `professional_id`, `preregistration_id`, `hypothesis`, `release`, `analysis` (§5 spec), `outcome`, `alpha` (number), `direction` ("positive" \| "negative" \| "two_sided"), `parents` [finding ids] |
 | `plsi_finding` | professional (`findings:submit`) | `professional_id`, `finding_id`, `preregistration_id`, `release`, `analysis` (§5 spec, identical to the preregistration's), `result` (§5), `summary` |
+| `plsi_feedback` | email only (§8), never the relay | `role` ("individual" \| "physician" \| "researcher"), `stages` [{`stage`, `minutes`, `measured`}], `frustrations` [{`stage`, `what`, `severity`}], `suggestions` [{`stage`, `what`}] |
 
 **Consent kinds** are `states`, `life_events`, `scores`: consent kind and package section are one word.
 
 **Contribution shape: coded fields only, no free text leaves PLSI.** Every object holds these fields and no others
 (`?` = optional); anything else is `unknown_field`.
-- `subject` {`sex`? ∈ M, F, X, unknown; `age_band`? `<lo>-<lo+4>` with lo a multiple of 5 in 0–115, or `90+`};
+- `subject` {`sex`? ∈ M, F, X, unknown; `age_band`? `<lo>-<lo+4>` with lo a multiple of 5 in 0–115, or `90+`;
+  `ethnicity`? ∈ european, african, middle_eastern, south_asian, east_asian, southeast_asian, latin_american, other
+  (absent when not given; never `unspecified`)}; any other value is `bad_format`;
   `consent_version` `\d+\.\d+\.\d+`.
 - `states[]` {`map_id`, `map_version`? `[0-9A-Za-z.+-]{1,32}`, `map_hash`? 64 lowercase hex (no `sha256:` prefix),
-  `as_of`? month, `gaps`? [ID], `coordinates` {ID: coordinate}}. A coordinate is {`status`? ID, `value`? number,
-  `unit`?, `comparator`? (`<`, `<=`, `>`, `>=`), `observed`? month, `series`? [{`t` month, `value` number}],
-  `items`? [{`code`, `clinical_status`? ID, `dose`?}]}. A set item without a code is not packed; no `text` or
+  `as_of`? month, `gaps`? [ID], `coordinates` {ID: coordinate}}. A coordinate is {`status`? `present` | `stale` | `missing` | `error`, `value`? number,
+  `unit`?, `comparator`? (`<`, `<=`, `>`, `>=`), `observed`? month, `series`? [{`t` month, `value` number, `n`? integer ≥ 1}: at most one
+  point per month, that month's mean over `n` recorded values, else `repeat_month`; `value` is the mean of its own
+  `observed` month too],
+  `items`? [{`code`, `clinical_status`? `active` | `stopped` | `resolved` | `unknown`, `dose`?}]}. A set item without a code is not packed; no `text` or
   `display`.
 - `life_events[]` {`kind` ID, `year` int, `until`? int (both 1900–2100), `basis` ID, `code`, `value`? number, `unit`?,
-  `clinical_status`? ID, `dose`?}. An event without a code is not packed; no `label`, no `value_text`; `note` is not a
+  `clinical_status`? `active` | `stopped` | `resolved` | `unknown`, `dose`?}. An event without a code is not packed; no `label`, no `value_text`; `note` is not a
   kind.
 - `dose` is exactly {`value` number > 0, `unit`} (else `missing_field`, `unknown_field`, `bad_number`, `bad_format`;
   a non-object is `bad_section`). Doses are stored only: releases and the catalog do not use them.
@@ -107,6 +112,23 @@ Bodies are JSON, not yet sealed. Sealing to a Mother public key is planned. The 
     (`10\.\d{4,9}/\S{1,200}`), nct (`NCT\d{8}`) or model (letters required, `[A-Za-z0-9._:/-]{1,80}`), else
     `bad_source`; a source id in these strict public forms is also exempt from `exact_date` (preprint DOIs hold
     `2023.12.02`).
+    So is `items[].support|against|risks[].source.id`, which must name one of the item's `sources`.
+- **A research note's `files`:** `name` is `[a-z0-9][a-z0-9_-]{0,79}` with `.csv`, `.tsv`, `.md` or `.json`, unique
+  in the note and exempt from `url` only; `sha256` is 64 lowercase hex digits and `drive_id` a Drive file id
+  (`[A-Za-z0-9_-]{20,80}`), both exempt from `exact_date` and `id_number`.
+- **A research note's `report`** gets every string rule; a violation's path is `report[<line>]` (the 1-based line
+  where the match starts; one violation per line and rule), but `too_long` and a wrong type stay at `report`. Only
+  there, these forms are blanked before the `exact_date` and `id_number` checks:
+  - citations: `PMID`, `PMIDs` or `pubmed` (any case), then every id of a list (`PMID 12345678, 23456789`, `PMIDs: 1,
+    2 and 3`); `NCT\d{8}`; a DOI `10\.\d{4,9}/[A-Za-z0-9._;()/:-]+` (never `@ ? = + & %`);
+  - ranges and intervals: a decimal number, `-` or `–` or ` to `, a decimal number (`0.71-0.95`, `0.71 to 0.95`),
+    and a confidence level `\d{1,2}(\.\d+)?%\s*CI` (`95% CI`);
+  - genome coordinates `chr<1-22|X|Y|M>:<digits>(-<digits>)?`; Ensembl `ENS[A-Z]*[GTPE]\d{11}`, UniProt
+    `[OPQ][0-9][A-Z0-9]{3}[0-9]`, dbSNP `rs\d{3,10}`, Illumina CpG probes `c[gh]\d{8}`. A note's files get the same
+    forms blanked in every cell and line.
+
+  The `url` check blanks only `https://doi.org/<doi>` and `doi.org/<doi>`: any other URL is refused. The `email` and
+  `internal_id` checks see the report as sent.
 - **Contributions:** `kinds` ⊆ consented kinds (PLSI side); every present section's kind is in `kinds`
   (`not_in_kinds`); `contributor_id` is 64 hex (`bad_contributor_id`).
 - **Withdrawals (Mother side):** `delete_all` requires `sha256_hex(proof) == contributor_id`. `proof` is the join-time
@@ -130,7 +152,7 @@ Bodies are JSON, not yet sealed. Sealing to a Mother public key is planned. The 
 - **Professional messages:** `professional_id` is a UUID (`bad_id`) and equals the token's `pid`
   (`professional_mismatch`): the relay checks this, and the Mother checks it against the `professional_id` of the
   parked record it takes from `/admin/body`. `release` matches `[0-9A-Za-z._-]{1,64}` (`bad_release`). Analysis group
-  `sex` is F or M and `age_band` a contribution age band, else `bad_spec`.
+  `sex` is F or M, `age_band` a contribution age band and `ethnicity` a §5 group value, else `bad_spec`.
 
 **Rule names** (the same on both gates; PLSI uses exactly these):
 
@@ -140,11 +162,16 @@ Bodies are JSON, not yet sealed. Sealing to a Mother public key is planned. The 
 | `unknown_kind`, `schema_version`, `sender` | the kind is unknown (or a `kinds` entry is), the version is not the integer 4, the sender may not send the kind |
 | `missing_field`, `unknown_field`, `forbidden_field` | a required field is absent (also `code`, `map_id`, `coordinates`, `result`); a field outside the kind or object (also in `subject` and in a `scores` cell); a forbidden key |
 | `bad_section` | a section, `subject`, a coordinate or a list has the wrong container type |
-| `bad_id`, `bad_code`, `bad_format`, `bad_number` | an ID, a code, a format (month, unit, age band, sex, comparator, versions, `map_hash`; also a non-string unit) or a number (also a wrong-type or bool number, a year out of range) fails |
-| `too_long`, `exact_date`, `email`, `url`, `id_number`, `internal_id` | the string rules above |
+| `repeat_month` | a coordinate's `series` holds more than one point for the same month |
+| `bad_id`, `bad_code`, `bad_format`, `bad_number` | an ID, a code, a format (month, unit, age band, sex, ethnicity, comparator, versions, `map_hash`; also a non-string unit) or a number (also a wrong-type or bool number, a year out of range) fails |
+| `too_long`, `exact_date`, `email`, `url`, `id_number`, `internal_id` | the string rules above (in a research note's `report` at `report[<line>]`) |
 | `not_in_kinds`, `bad_contributor_id` | contribution rules above |
 | `bad_request`, `unexpected_proof`, `bad_proof` | withdrawal rules above |
 | `bad_items`, `bad_source` | research note and registry `items` not a list of objects; a source not in its strict form |
+| `bad_context` | a research-note context field (§3) of the wrong shape or length, or a finding whose `source` is not one of the item's `sources` |
+| `bad_files` | a research note's `files` that is not 1-20 entries of `{name, sha256[, drive_id]}` in the forms of §3, or repeats a name |
+| `formula` | a file cell that starts with `=`, `+`, `-` or `@` and is not a number (a spreadsheet formula) |
+| `embedded_data` | any text holding a `data:` URI, or a run of 120 or more base64 characters that mixes lower case, upper case and digits (a DNA or protein sequence or a hex hash does not): a picture or file hidden in text |
 | `professional_mismatch`, `bad_release`, `bad_spec`, `bad_alpha`, `bad_direction`, `bad_parents`, `bad_result` | professional rules above and §5 |
 
 ## 4. Relay HTTP API
@@ -214,13 +241,15 @@ keys are equal, every admin and intake route answers 503 `admin_not_configured`.
 ```json
 {"version": "2026-11", "built": "2026-11", "min_cell": 10, "suppressed_cells": 12,
  "cells": [{"map_id": "blood_phenoage", "coordinate": "phenoage_accel", "unit": "y", "age_band": "40-44",
-            "sex": "F", "n": 23, "mean": -1.2, "sd": 3.4, "p25": -3.1, "p50": -1.0, "p75": 0.9}]}
+            "sex": "F", "ethnicity": "unspecified", "n": 23, "mean": -1.2, "sd": 3.4, "p25": -3.1, "p50": -1.0, "p75": 0.9}]}
 ```
 
 Each cell uses one value per active contributor: the latest numeric `value` of that coordinate in their latest
 contribution (of several states of one map, the one with the latest `as_of`), so one package never counts twice.
+A cell is keyed by (`map_id`, `coordinate`, `unit`, `age_band`, `sex`, `ethnicity`), where `ethnicity` is the
+subject's, or `unspecified` when the subject has none; `cells` are sorted by that key.
 Withdrawn (`stop`) contributors are left out. Cells with `n < min_cell` are left out, and only counted in
-`suppressed_cells`. Floats are rounded to 4 significant digits.
+`suppressed_cells`. Floats are rounded to 4 significant digits. The catalog has no ethnicity breakdown.
 
 **Catalog** (`mother catalog`, public):
 
@@ -235,14 +264,20 @@ coordinate with fewer than `min_cell` contributors is not listed, nor is a month
 `min_cell` contributors; both are only counted in `suppressed`.
 
 **Analysis spec**, one of:
-- `{"op": "compare_groups", "map_id", "coordinate", "group_a": {"age_band"?, "sex"?}, "group_b": {...}}`.
-  - Each group pools the matching cells (n-weighted mean, pooled SD).
+- `{"op": "compare_groups", "map_id", "coordinate", "group_a": {"age_band"?, "sex"?, "ethnicity"?}, "group_b": {...}}`.
+  - Each group pools its matching cells.
   - Welch's t-test on the two pooled groups.
   - `effect` = mean_a − mean_b; 95% CI from the Welch t quantile.
-- `{"op": "age_trend", "map_id", "coordinate", "sex"?: "F"|"M"}`.
+- `{"op": "age_trend", "map_id", "coordinate", "sex"?: "F"|"M", "ethnicity"?}`.
   - Weighted least squares of the cell means on the age-band midpoint, with weights `n / sd²`.
-  - Cells of different sex are pooled first, per band, when `sex` is absent.
+  - The matching cells are pooled first, per band, over sex and ethnicity when those are absent.
   - `effect` = slope per year; SE from WLS; t with (bands − 2) df; at least 3 bands, else error `too_few_cells`.
+
+**Groups:** a group (and the `sex`, `ethnicity` of `age_trend`) may name only `age_band` (an age band), `sex` (F or M)
+and `ethnicity` (a contribution value or `unspecified`); a cell matches when it equals every key the group names, and
+a key it does not name is pooled over. The matching cells, in release order, are pooled: n = Σnᵢ, mean = Σnᵢmeanᵢ / n,
+SD = √((Σ(nᵢ−1)sdᵢ² + Σnᵢ(meanᵢ−mean)²) / (n−1)). A spec that names no `ethnicity` on a release whose contributors
+have none gives the same result as before ethnicity.
 
 **Result:** `{"effect", "interval": [lo, hi], "n", "statistic", "df", "p"}`. These are floats rounded to 6 significant
 digits, with p two-sided. Both sides use the same stdlib implementation of the Student t CDF (regularized incomplete beta,
@@ -254,14 +289,26 @@ Every stored message is the gated document re-serialised canonically (`json.dump
 separators=(",", ":"), ensure_ascii=False, allow_nan=False)`), never the raw text; the sha256 check against the
 relay_ref uses the raw bytes.
 
+Deletion is final: the service account is a Manager of the shared drive. If Drive refuses a delete (403, a Content
+manager), the item goes to the drive's trash instead (emptied by Drive after 30 days) and the result carries
+`trashed: true`: in a `delete_all` reply and its ACK (`{ok: true, receipt, kind, status: "deleted", packages_deleted,
+trashed: true}`), and in `research decide`. The audit log records `deletion_trashed` or `research_trashed`.
+
 ```
 intake/<contributor_id>/<receipt>.json     gated contributions, never edited
 notes/<receipt>.json                       registry updates (pending review)
 notes/decisions.jsonl                      registry decisions: {at, receipt, decision, by (a steward), reason}
-research/<receipt>/note.json               a gated research note (§7), never edited
-research/<receipt>/sender.json             {address, received_at, dmarc}: the address only for the reply, never in a release, catalog or digest
-research/log.jsonl                         append-only: {at, type: review|decision, receipt, ...}
+research/pending/<receipt>/note.json       a gated research note (§7) until a steward decides, never edited
+research/pending/<receipt>/sender.json     {address, received_at, dmarc}: the address only for the reply, never in a release, catalog or digest
+research/accepted/<receipt>/               an accepted note, moved from pending/ with its sender.json
+research/rejected/<receipt>/               a rejected note, moved from pending/; once replied, sender.json keeps only
+                                           {received_at, dmarc}
+research/log.jsonl                         append-only: {at, type: review|decision|replied, receipt, ...}; a decision
+                                           carries reply: pending until a replied entry follows
 research/digests/<YYYY-MM-DD>.md           the daily research digest, as sent to the stewards
+feedback/reports/<receipt>/report.json     a gated feedback report (§8), never edited
+feedback/reports/<receipt>/meta.json       {received_at, dmarc, sender_sha256}: no address
+feedback/digests/feedback_<YYYYMMDD>.md    the weekly feedback digest, as sent to the stewards
 index.json                                 contributor_id -> {receipts, kinds, consent_version, status, last_packed}
 deletions/<receipt>.json                   deletion receipts: {receipt, at, contributor_id_sha256 (hash of the pseudonym), packages_deleted}
 releases/<version>/release.json            §5
@@ -281,26 +328,87 @@ that keeps irresponsible research off the Mothership. There is no anonymous rese
   from the `email` of `longevity_mothership_research` in `mothership/references/contact.yaml`. Mail to any other address of the Mother is never
   research intake.
 - **Email:** plain text, sent from the user's own Grok email after their approval. Subject `PLSI research note: <claim,
-  at most 80 characters>`. Body: the note in plain words for a human reader, then exactly one fenced block opened by a
-  line ```` ```plsi ```` and closed by a line ```` ``` ````, holding the `plsi_research_note` body (§3) as JSON, gate-checked by PLSI. Nothing else
-  in the email is read as data; attachments are ignored.
-- **Intake** (`mother research intake --eml <file>`): the bot saves the raw email as received; code parses the `From`
+  at most 80 characters>`. Body: the note in plain words for a human reader. The `plsi_research_note` body (§3),
+  gate-checked by PLSI, is one `.json` attachment; an older PLSI puts it instead in one fenced block of the body,
+  opened by a line ```` ```plsi ```` and closed by a line ```` ``` ````. Nothing else in the email is read as data. An
+  image, video or audio part (a signature logo, a photo) is never read and never refuses the email: intake counts
+  them as `images_ignored`. Pictorial data therefore never reaches the store, because only the note and its listed
+  files are read.
+- **Files:** a note's `files` without a `drive_id` travel in the email as one `.zip` attachment holding exactly them,
+  flat, unencrypted, at most 10 MB packed, 9 MB per file and 20 MB in all (else `BAD_BUNDLE`; none when the note lists
+  some: `NO_BUNDLE`). Each must match its `sha256` (`HASH_MISMATCH`) and pass the file checks of Shared files below,
+  where any violation, a formula included, refuses the whole note as `GATE_FAILED` at `files[<n>]`; a note is never
+  edited, so a formula is not neutralised. They are stored with the note (`files/<name>`), moved with it when
+  accepted and dropped when it is rejected. A file with a `drive_id` stays in the sender's Drive, shared as Viewer
+  with the Mother's service account (`email` of `longevity_mothership_drive` in `contact.yaml`): `mother research
+  fetch --receipt <r> --name <file>` reads its Drive sha256 first, downloads only when it equals the note's, checks the
+  downloaded bytes against the note's sha256 again (the file may change between the two reads), then
+  returns it as `external_text` when it passes the file checks. A Drive file is stored only when a steward accepts the
+  note with a copy (`--keep`: the checked copy goes to `files/<name>` and moves with the note); otherwise each read
+  goes to the sender's Drive, so the note's Drive data lasts only as long as the sender keeps it shared and unchanged.
+  `mother research show --receipt <r> --file <name>` returns a stored (email) file as `external_text`.
+- **Intake** (`mother research intake --eml <file> [--attachment <file>] [--bundle <file>]`): the bot saves the raw
+  email as received (and its `.json` and `.zip` attachments, when the saved email does not hold them); code parses the `From`
   address (exactly one `From` header without parse defects, holding one ASCII addr-spec whose domain is a host name
-  with a letter, no IP literal; else `BAD_SENDER`), the subject (must start `PLSI research note:`) and the one plsi
-  block (else `NO_RESEARCH_NOTE`). Nothing from the email goes on a command line. The same gate as §3 with
+  with a letter, no IP literal; else `BAD_SENDER`), the subject (stripped of leading and trailing white space, as a folded subject can
+  start with a space; must start `PLSI research note:`) and the one `.json`
+  attachment, else the one plsi block (else `NO_RESEARCH_NOTE`). Nothing from the email goes on a command line.
+  The same gate as §3 with
   sender `email` (the only sender a research note is allowed from); a refused note gets a reply email with the
-  violations and is stored nowhere. Stored: `research/<receipt>/note.json` and `sender.json`. One sender may have at most
-  5 notes pending review (`TOO_MANY_PENDING`).
+  violations and is stored nowhere. Stored: `research/pending/<receipt>/note.json` and `sender.json`; `decide`
+  moves them to `research/accepted/` (the address kept, for later replies and to spot a repeat) or
+  `research/rejected/` (the address dropped once the reply is sent, §6); `mother research tidy` does the same once
+  for notes decided while they were stored at `research/<receipt>/`. One sender may have at most
+  5 notes pending review (`TOO_MANY_PENDING`). A note its sender already sent (the same canonical body) gets its
+  first receipt back with `repeat: true` and nothing is stored, so an email taken in twice is one note.
+- **Inbox:** the email itself stays in the Mother's Grok inbox, which neither the Mother nor a steward can delete
+  from; the store's rules (the address dropped, deletion) cover the store only. The inbox is read only by intake.
 - **DMARC:** `dmarc` is read from the first (topmost, the receiving server's) `Authentication-Results` header, comments
   dropped: `pass`; `none` when there is no header, no dmarc result or `dmarc=none`; `fail` for any other result. It
   is stored in `sender.json` and shown to stewards in `research list`, `research show` and the digest. It never refuses
   a note: a saved .eml may not carry the header.
+- **Warnings:** `research intake` and `research show` (and `feedback intake`, `feedback show` and `feedback digest`)
+  return `warnings`, a list of `{path, flag}`: `instruction` for text that speaks to a bot ("ignore previous
+  instructions", "system prompt", "the stewards must accept") and `promotion` for selling (prices, "buy now",
+  discount codes). A warning never refuses and is not stored: it points the review to where to look.
 - **Review:** the Mother's own review (`mother research review --receipt <r> --verdict ok|revise|reject --notes-file
   <file>`), then a steward's decision (`mother research decide --receipt <r> --decision accepted|rejected --by
   <steward> --reason-file <file>`). Free text the bot writes from an email always goes in a file. Both are appended to
   `research/log.jsonl`; the note is never edited.
 - **Replies** (the Mother's Grok email, to `sender.json`'s address only): a receipt on intake, the decision with its
   reason after `decide`. A reply never contains another sender's address or note.
+- **Shared files** (`mother research fetch --link <Drive link> [--check] [--out <file>]`): a file a researcher shared
+  with the service account as viewer, read by the Drive API only. `--check` reads its name, type, size, sha256 and
+  revision; a download is never asked to override Google's malware flag. Only csv, tsv, md and json are taken,
+  recognised by content, at most 9 MB; images, video and audio are refused from their Drive type, before any
+  download. Spreadsheet formulas are neutralised and text gets the §3 rules. A chart is Vega-Lite JSON with its
+  data inline: no `url`, `href` or `image` mark, at most 5,000 rows (`BAD_CHART`).
+  Google Docs, Sheets and Slides are refused (no fixed bytes). With `--link`, the checked copy goes to `--out`, never
+  to the store; a note's own Drive file is fetched with `--receipt` and `--name` (Files above).
 - **Daily digest** (`mother research digest --date <YYYY-MM-DD>`): that day's received, reviewed and decided notes with
   their claims, grades and decisions, and no addresses; the Mother summarizes it for the stewards and saves the text
   with `--save <file>`.
+
+## 8. Feedback by email
+
+Users' reports on how PLSI works for them, for its developers. Like research (§7) they come by email, so a user
+needs no join or token; unlike research nothing is reviewed, decided or published.
+
+- **Address:** the Mother's Grok email with the `+feedback` postfix. PLSI reads it from the `email` of
+  `longevity_mothership_feedback` in `mothership/references/contact.yaml`.
+- **Email:** sent from the user's own Grok email after their approval of that report. Subject `PLSI feedback: <n>
+  frustrations, <m> suggestions`; body: the report in plain words, then one ```` ```plsi ```` block holding the
+  `plsi_feedback` body (§3), gate-checked by PLSI.
+- **Body rules:** the §3 gate with sender `email`, and: `stage` is one of `install`, `team`, `choices`, `interview`,
+  `specialists`, `connectors`, `instance`, `routines`, `mothership`, `welcome` (the setup stages of PLSI's
+  `plsi.md`), `records`, `plans`, `research`, `other`; `minutes` a whole number 0-1440, `measured` true when PLSI timed
+  the stage, false when estimated; `severity` `low`, `medium` or `high`; `what` 1-300 characters, about PLSI, never
+  about the person; each list at most 20 entries, not all three empty.
+- **Intake** (`mother feedback intake --eml <file>`): the From, subject (stripped, must start `PLSI feedback:`, else
+  `NO_FEEDBACK`) and block are parsed as in §7. Stored: `feedback/reports/<receipt>/`, with the sha256 of the address
+  and never the address. The email stays in the Mother's Grok inbox, as in §7. The same report from the same sender gets its first receipt with `repeat: true`; at most 5
+  reports per sender in seven days (`TOO_MANY_REPORTS`). The reply (a thank-you with the receipt, or the refusal) goes
+  to the From address only.
+- **Digest** (`mother feedback digest --since <YYYY-MM-DD>`): reports since that day by role; per stage the number of
+  measured reports, median and longest minutes; frustrations per stage ranked by severity (high 3, medium 2, low 1)
+  with their receipts; suggestions per stage. No addresses. `--save <file>` stores the Mother's digest text.

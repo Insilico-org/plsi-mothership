@@ -13,9 +13,9 @@ import re
 import unicodedata
 from typing import Any
 
-from mother import contribution, stats
+from mother import contribution, note, stats
 from mother.errors import GateFailed, violation
-from mother.vocab import ContributionKind, Direction, Kind, Op, Request, Sender
+from mother.vocab import ContributionKind, Direction, FeedbackRole, FeedbackStage, Kind, Op, Request, Sender, Severity
 
 SCHEMA_VERSION = 4
 MAX_DEPTH = 32
@@ -24,20 +24,27 @@ MAX_KEY = 64
 FIELDS = {  # kind -> (required, optional) body fields beyond kind and schema_version
     Kind.CONTRIBUTION: ({"contributor_id", "consent_version", "packed", "kinds", "subject"}, set(ContributionKind)),
     Kind.WITHDRAWAL: ({"contributor_id", "request"}, {"proof"}),
-    Kind.RESEARCH_NOTE: ({"items", "method"}, set()),
+    Kind.RESEARCH_NOTE: ({"items", "method"}, {"report", "files"}),
     Kind.REGISTRY_UPDATE: ({"items"}, set()),
     Kind.PREREGISTRATION: ({"professional_id", "preregistration_id", "hypothesis", "release", "analysis", "outcome",
                             "alpha", "direction", "parents"}, set()),
     Kind.FINDING: ({"professional_id", "finding_id", "preregistration_id", "release", "analysis", "result",
                     "summary"}, set()),
+    Kind.FEEDBACK: ({"role", "stages", "frustrations", "suggestions"}, set()),
 }
 ITEM_FIELDS = {
-    Kind.RESEARCH_NOTE: {"claim", "grade", "evidence_class", "sources", "falsified_by", "next_step"},
+    Kind.RESEARCH_NOTE: {"claim", "grade", "evidence_class", "sources", "falsified_by", "next_step", *note.FIELDS},
     Kind.REGISTRY_UPDATE: {"kind", "name", "specialty", "country", "public_url", "methods", "credentials", "source_urls"},
 }
 SENDERS = {Kind.CONTRIBUTION: {Sender.CONTRIBUTOR}, Kind.WITHDRAWAL: {Sender.CONTRIBUTOR},
            Kind.REGISTRY_UPDATE: {Sender.CONTRIBUTOR}, Kind.RESEARCH_NOTE: {Sender.EMAIL},
-           Kind.PREREGISTRATION: {Sender.PROFESSIONAL}, Kind.FINDING: {Sender.PROFESSIONAL}}
+           Kind.PREREGISTRATION: {Sender.PROFESSIONAL}, Kind.FINDING: {Sender.PROFESSIONAL},
+           Kind.FEEDBACK: {Sender.EMAIL}}
+FEEDBACK = {"stages": {"stage", "minutes", "measured"}, "frustrations": {"stage", "what", "severity"},
+            "suggestions": {"stage", "what"}}
+MAX_FEEDBACK = 20  # entries per list
+MAX_MINUTES = 1440
+MAX_WHAT = 300
 FORBIDDEN_KEYS = frozenset({"subject_id", "instance", "birth_year", "event_id", "event_ids", "path", "original_path",
                             "install_id"})
 MONTH_NAME = r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?"
@@ -52,21 +59,25 @@ PATTERNS = {
     "url": re.compile(rf"(?i)\bhttps?://|\bwww\.|(?<![\w-])[\w-]+\.(?:{TLDS})\b"),
     "id_number": re.compile(r"\d[\d\s().-]{6,}\d"),
     "internal_id": re.compile(r"\b(?:s_[0-9a-f]{12}|evt_[0-9a-f]{8,32})\b"),
+    # a data: URI or a long base64 run mixing cases and digits (sequences and hex hashes do not)
+    "embedded_data": re.compile(r"(?i:\bdata:[a-z]+/[\w.+-]+;base64)|(?<![A-Za-z0-9+/])(?=[A-Za-z0-9+/]*[a-z])"
+                                r"(?=[A-Za-z0-9+/]*[A-Z])(?=[A-Za-z0-9+/]*[0-9])[A-Za-z0-9+/]{120,}"),
 }
 YEARS = re.compile(r"(?<!\d)(?:19|20)\d{2}(?!\d)")
 # exemptions by exact path (`[]` any index, `*` any coordinate key), per rule and kind; keys are never exempt. A
 # `code.code` is exempt only in a code object of a numbered system (contribution.NUMBERED), never a free or cpg code.
 # Source ids (strict public forms) are exempt from exact_date too: preprint DOIs hold "2023.12.02".
 EXEMPT = {
-    "exact_date": {Kind.RESEARCH_NOTE: frozenset({"items[].sources[].id"})},
+    "exact_date": {Kind.RESEARCH_NOTE: frozenset({"items[].sources[].id", *note.SOURCE_PATHS, *note.FILE_PATHS})},
     "id_number": {
         Kind.CONTRIBUTION: frozenset({"contributor_id", "states[].map_hash", "states[].coordinates.*.items[].code.code",
                                       "life_events[].code.code"}),
         Kind.WITHDRAWAL: frozenset({"contributor_id", "proof"}),
-        Kind.RESEARCH_NOTE: frozenset({"items[].sources[].id"}),
+        Kind.RESEARCH_NOTE: frozenset({"items[].sources[].id", *note.SOURCE_PATHS, *note.FILE_PATHS}),
         Kind.PREREGISTRATION: frozenset({"professional_id", "preregistration_id", "release", "parents[]"}),
         Kind.FINDING: frozenset({"professional_id", "finding_id", "preregistration_id", "release"})},
-    "url": {Kind.REGISTRY_UPDATE: frozenset({"items[].public_url", "items[].source_urls[]"})},
+    "url": {Kind.REGISTRY_UPDATE: frozenset({"items[].public_url", "items[].source_urls[]"}),
+            Kind.RESEARCH_NOTE: frozenset({"files[].name"})},
 }
 KEYED = frozenset({"states[].coordinates", "scores.by_coordinate"})  # objects keyed by coordinate ids
 HEX64 = contribution.HEX64
@@ -78,9 +89,10 @@ SOURCE_IDS = {"pmid": re.compile(r"[1-9]\d{0,7}"), "doi": re.compile(r"10\.\d{4,
               "nct": re.compile(r"NCT\d{8}"), "model": re.compile(r"(?=.*[A-Za-z])[A-Za-z0-9._:/-]{1,80}")}
 RESULT_KEYS = ("effect", "interval", "n", "statistic", "df", "p")
 # every field name of the wire: the only key text a path ever shows
-NAMES = frozenset({"kind", "schema_version", "id", *FORBIDDEN_KEYS, *contribution.NAMES, *RESULT_KEYS,
+NAMES = frozenset({"kind", "schema_version", "id", *FORBIDDEN_KEYS, *contribution.NAMES, *RESULT_KEYS, *note.NAMES,
                    *(k for required, optional in FIELDS.values() for k in required | optional),
                    *(k for fields in ITEM_FIELDS.values() for k in fields),
+                   *(k for fields in FEEDBACK.values() for k in fields),
                    *(k for op in Op for k in stats.SPEC_KEYS[op]), *stats.GROUP_KEYS})
 
 
@@ -160,15 +172,17 @@ def _text(doc: dict[str, Any], kind: Kind) -> list[dict[str, str]]:
     for path, plain, text, is_key, parent in _strings(doc):
         if is_key and text in FORBIDDEN_KEYS:
             out.append(violation(path, "forbidden_field"))
-        if len(text) > (MAX_KEY if is_key else MAX_STRING):
+        if len(text) > (MAX_KEY if is_key else note.MAX_REPORT if plain == "report" else MAX_STRING):
             out.append(violation(path, "too_long"))
             continue
-        clean = _clean(text)
+        report, clean = kind == Kind.RESEARCH_NOTE and plain == "report" and not is_key, _clean(text)
         for rule, pattern in PATTERNS.items():
             if not is_key and _exempt(rule, kind, plain, parent):
                 continue
-            if pattern.search(YEARS.sub(" ", clean) if rule == "id_number" else clean):  # "2010-2015" is no id
-                out.append(violation(path, rule))
+            seen = note.mask(rule, clean) if report else clean
+            seen = YEARS.sub(" ", seen) if rule == "id_number" else seen  # "2010-2015" is no id
+            at = [f"report[{n}]" for n in note.lines(pattern, seen)] if report else [path][:bool(pattern.search(seen))]
+            out += [violation(p, rule) for p in at]
     return out
 
 
@@ -189,7 +203,7 @@ def _fields(doc: dict[str, Any], kind: Kind) -> list[dict[str, str]]:
         out += [violation(_name(k, m, f"items[{n}]"), "unknown_field")
                 for n, item in enumerate(items) for m, k in enumerate(item) if k not in ITEM_FIELDS[kind]]
         if kind == Kind.RESEARCH_NOTE:
-            out += _sources(items)
+            out += _sources(items) + note.check(items, SOURCE_IDS["model"].fullmatch, doc.get("report")) + note.files(doc)
     return out
 
 
@@ -271,6 +285,31 @@ def _professional(doc: dict[str, Any], kind: Kind, professional_id: str | None) 
     return out
 
 
+def _feedback(doc: dict[str, Any]) -> list[dict[str, str]]:
+    """The plsi_feedback rules of WIRE §8."""
+    out = [] if doc.get("role") in tuple(FeedbackRole) else [violation("role", "unknown_role")]
+    for key, fields in FEEDBACK.items():
+        entries = doc.get(key)
+        if not isinstance(entries, list) or len(entries) > MAX_FEEDBACK:
+            out.append(violation(key, "bad_entries"))
+            continue
+        for n, e in enumerate(entries):
+            at = f"{key}[{n}]"
+            if not isinstance(e, dict) or set(e) != fields:
+                out.append(violation(at, "bad_entry"))
+                continue
+            ok = e["stage"] in tuple(FeedbackStage) and (
+                "minutes" not in e or (type(e["minutes"]) is int and 0 <= e["minutes"] <= MAX_MINUTES
+                                       and type(e["measured"]) is bool))
+            ok = ok and ("what" not in e or (isinstance(e["what"], str) and 0 < len(e["what"].strip()) <= MAX_WHAT))
+            ok = ok and ("severity" not in e or e["severity"] in tuple(Severity))
+            if not ok:
+                out.append(violation(at, "bad_entry"))
+    if not out and not (doc["frustrations"] or doc["suggestions"] or doc["stages"]):
+        out.append(violation("$", "empty_feedback"))
+    return out
+
+
 def violations(doc: Any, sender: str = Sender.CONTRIBUTOR, professional_id: str | None = None) -> list[dict[str, str]]:
     """Everything that keeps `doc` out of the store, given its sender (from the relay's parked record, or `email`)."""
     if _depth(doc) > MAX_DEPTH:
@@ -286,4 +325,6 @@ def violations(doc: Any, sender: str = Sender.CONTRIBUTOR, professional_id: str 
         out += _contributor(doc, kind)
     elif kind in (Kind.PREREGISTRATION, Kind.FINDING):
         out += _professional(doc, kind, professional_id)
+    elif kind == Kind.FEEDBACK:
+        out += _feedback(doc)
     return out

@@ -20,7 +20,7 @@ class Store(Protocol):
     def write(self, path: str, text: str) -> None: ...
     def append(self, path: str, line: str) -> None: ...
     def list(self, prefix: str) -> list[str]: ...
-    def delete(self, path: str) -> None: ...
+    def delete(self, path: str) -> bool: ...  # False: some of it only went to the backend's trash
     def exists(self, path: str) -> bool: ...
 
 
@@ -65,12 +65,13 @@ class LocalStore:
             return []
         return sorted(p.relative_to(self.root).as_posix() for p in base.rglob("*") if p.is_file())
 
-    def delete(self, path: str) -> None:
+    def delete(self, path: str) -> bool:
         p = self._path(path)
         if p.is_dir():
             shutil.rmtree(p)
         elif p.exists():
             p.unlink()
+        return True
 
     def exists(self, path: str) -> bool:
         return self._path(path).exists()
@@ -127,6 +128,15 @@ class DriveStore:
                 return None
         return item
 
+    def shared(self, file_id: str) -> dict[str, Any]:
+        """Metadata of a file someone shared with the service account; nothing is downloaded."""
+        fields = "id, name, mimeType, size, sha256Checksum, headRevisionId, modifiedTime"
+        return self.files.get(fileId=file_id, fields=fields, **self.common).execute()
+
+    def shared_bytes(self, file_id: str) -> bytes:
+        """The file's bytes; never with acknowledgeAbuse, so a file flagged as malware is not fetched."""
+        return self.files.get_media(fileId=file_id, **self.common).execute()
+
     def read(self, path: str) -> str:
         item = next((i for i in self._all(_parts(path)) if i["mimeType"] != FOLDER), None)
         if item is None:
@@ -161,9 +171,23 @@ class DriveStore:
                     out.append(path)
         return sorted(set(out))
 
-    def delete(self, path: str) -> None:
+    def delete(self, path: str) -> bool:
+        """Delete for good; True when everything is gone. On a shared drive only a Manager may delete: a Content
+        manager service account is refused (403), so the item goes to the drive's trash (emptied after 30 days) and
+        the result is False, for the caller to tell whoever asked for the deletion."""
+        gone = True
         for item in self._all(_parts(path)):
-            self.files.delete(fileId=item["id"], **self.common).execute()
+            try:
+                self.files.delete(fileId=item["id"], **self.common).execute()
+            except Exception as exc:  # noqa: BLE001 - googleapiclient's HttpError, imported only with the extra
+                status = getattr(getattr(exc, "resp", None), "status", None)
+                if status == 404:  # already gone
+                    continue
+                if status != 403:
+                    raise
+                self.files.update(fileId=item["id"], body={"trashed": True}, **self.common).execute()
+                gone = False
+        return gone
 
     def exists(self, path: str) -> bool:
         return bool(self._all(_parts(path)))

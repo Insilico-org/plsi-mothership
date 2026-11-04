@@ -19,7 +19,8 @@ size beyond what `mother` prints.
    - nobody gave the Mother relay data (logs, IPs, install ids) and nobody asked it to;
    - the professional registry is kept apart from the Mother's storage and was never joined with the contributor
      index; no document holds both a professional id and a contributor id;
-   - the shared drive has no link sharing and only steward accounts and the service account have access;
+   - the shared drive has no link sharing and only steward accounts, the Mother's service account and each
+     steward's own service account have access; a former steward's account is removed;
    - the relay's admin key is not in the bot's secret store (only `MOTHER_RELAY_INTAKE_KEY` is), and was rotated if it
      ever was.
 4. Send it to the stewards. An unconfirmed check is an open incident until a steward closes it.

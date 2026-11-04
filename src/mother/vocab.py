@@ -14,10 +14,11 @@ class Kind(StrEnum):
     REGISTRY_UPDATE = "plsi_registry_update"
     PREREGISTRATION = "plsi_preregistration"
     FINDING = "plsi_finding"
+    FEEDBACK = "plsi_feedback"
 
 
 class Sender(StrEnum):
-    """Who sent the message: the relay's parked record (which token), or `email` for a research note (§7)."""
+    """Who sent the message: the relay's parked record (which token), or `email` for a research note or feedback."""
 
     CONTRIBUTOR = "contributor"
     PROFESSIONAL = "professional"
@@ -75,6 +76,31 @@ class ContributorStatus(StrEnum):
     DELETED = "deleted"  # only in the intake reply: a deleted contributor leaves the index
 
 
+class ValueStatus(StrEnum):
+    """A coordinate's status in a contributed state."""
+
+    PRESENT = "present"
+    STALE = "stale"
+    MISSING = "missing"
+    ERROR = "error"
+
+
+class ClinicalStatus(StrEnum):
+    """Whether a coded item is current."""
+
+    ACTIVE = "active"
+    STOPPED = "stopped"
+    RESOLVED = "resolved"
+    UNKNOWN = "unknown"
+
+
+class NoteTopic(StrEnum):
+    TARGET = "target"
+    REPURPOSING = "repurposing"
+    METHOD = "method"
+    HALLMARK = "hallmark"
+
+
 class NoteStatus(StrEnum):
     """A stored registry update or research note before a steward decides on it."""
 
@@ -89,6 +115,21 @@ class Sex(StrEnum):
     M = "M"
     X = "X"
     UNKNOWN = "unknown"
+
+
+class Ethnicity(StrEnum):
+    """A contribution's optional `subject.ethnicity`; a release cell without one is `unspecified` (WIRE §5), which a
+    contribution never sends."""
+
+    EUROPEAN = "european"
+    AFRICAN = "african"
+    MIDDLE_EASTERN = "middle_eastern"
+    SOUTH_ASIAN = "south_asian"
+    EAST_ASIAN = "east_asian"
+    SOUTHEAST_ASIAN = "southeast_asian"
+    LATIN_AMERICAN = "latin_american"
+    OTHER = "other"
+    UNSPECIFIED = "unspecified"
 
 
 class Op(StrEnum):
@@ -134,6 +175,7 @@ class ResearchEntry(StrEnum):
 
     REVIEW = "review"
     DECISION = "decision"
+    REPLIED = "replied"
 
 
 class FindingStatus(StrEnum):
@@ -154,3 +196,34 @@ class Publication(StrEnum):
     CATALOG = "catalog"
     RELEASE = "release"
     FINDINGS = "findings"
+
+
+class FeedbackStage(StrEnum):
+    """Setup stages of plsi.md, then use (WIRE §8)."""
+
+    INSTALL = "install"
+    TEAM = "team"
+    CHOICES = "choices"
+    INTERVIEW = "interview"
+    SPECIALISTS = "specialists"
+    CONNECTORS = "connectors"
+    INSTANCE = "instance"
+    ROUTINES = "routines"
+    MOTHERSHIP = "mothership"
+    WELCOME = "welcome"
+    RECORDS = "records"
+    PLANS = "plans"
+    RESEARCH = "research"
+    OTHER = "other"
+
+
+class Severity(StrEnum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
+class FeedbackRole(StrEnum):
+    INDIVIDUAL = "individual"
+    PHYSICIAN = "physician"
+    RESEARCHER = "researcher"

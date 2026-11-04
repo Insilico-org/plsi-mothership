@@ -1,75 +1,129 @@
-# plsi-mothership
+# Longevity Mothership
 
-The Longevity Mothership side of [PLSI](https://github.com/Insilico-org/PLSI): the **relay** that PLSI installs and
-verified professionals talk to, and the **Mother**, a Grok Bot with the `mother` toolbelt that stores, deletes,
-aggregates and publishes. The PLSI repo holds only the client.
+The Longevity Mothership is a longevity research initiative run by Insilico Medicine. People who use
+[PLSI](https://github.com/Insilico-org/PLSI), a personal longevity assistant that runs on Grok, can choose to share
+deidentified health data with it. The pooled data helps us learn how health changes with age and which actions
+shift it. Joining is optional, and PLSI works the same without it.
 
-The single contract between PLSI, the relay and the Mother is [contracts/WIRE.md](contracts/WIRE.md). A change
-there is a version bump on all three sides at once.
+This repository is the receiving end. It has two parts:
 
-PLSI waits for Mother's contribution ACK before `leave --delete`, and keeps the join-time contributor secret until
-Mother replies `deleted`. That secret is the `delete_all` proof (`sha256` equals `contributor_id`); a re-join cannot
-delete the previous pseudonym. Mother refuses a contribution that arrives after a `delete_all` receipt for the same
-pseudonym. A withdrawal that runs first can still report `packages_deleted: 0`; a package already stored for a deleted
-pseudonym is an orphan a steward removes. Sequencing: [mother.md](mother.md) §6 and WIRE §3.
+- **The relay**, a small web service on Cloudflare. PLSI sends files through it, and it hands them on.
+- **The Mother**, a Grok Bot run by Insilico's data stewards. It checks what arrives, stores it, deletes it on
+  request, and builds the pooled results.
 
-Research notes never take the relay: PLSI users send them from their own Grok email to the Mother's
-`+research` address, signed by their address, which keeps irresponsible research off the Mothership. The Mother saves
-each raw email and takes it in with `mother research intake --eml` (code parses the sender and the note and records
-the email's DMARC result for the stewards; nothing from an email goes on a command line), reviews them, asks a steward to decide, replies to the sender with the receipt
-and the decision, and sends the stewards a daily digest without addresses (WIRE §7, skill `research`). Notes are stored
-under `research/`, apart from contributions and registry updates.
+PLSI itself, the part on your computer, lives in the PLSI repository.
 
-## Split knowledge (WIRE §1)
+## What you can share
 
-| Party | Knows | Never knows |
+You choose each kind separately when you join:
+
+- **Your health states**: values PLSI computed from your records, such as blood markers, and your medications and
+  conditions as standard medical codes. Each is dated to the month.
+- **Your life story**: health events from your history, such as conditions, treatments and lifestyle periods, as
+  standard medical codes. Each is dated to the year.
+- **Your prediction scores**: how well PLSI's predictions matched your later results, as counts and averages only.
+
+Each file describes you only by sex, a five-year age band and, if you gave one, a broad ethnicity group.
+
+**What never leaves your computer:** your name, contact details, addresses, employer, record or ID numbers, exact
+dates, your birth year or age, the documents you uploaded, and any words from you or your records. Only codes,
+numbers and units are sent. The records of family members you added to PLSI are never sent either.
+
+The full terms you agree to are in PLSI's [consent text](https://github.com/Insilico-org/PLSI/blob/main/mothership/consent.md).
+
+## How your data travels
+
+1. **Joining.** You open the relay's join page once and give PLSI the one-time code it shows. PLSI then makes a
+   random contributor code on your computer. Your files carry that code instead of your identity.
+2. **Sending.** PLSI sends at most one file a week over an encrypted connection. The relay holds it unchanged
+   until the Mother collects it, at most a day. After that the relay keeps only the receipt, "stored" or
+   "refused", for seven days so PLSI can confirm the file arrived.
+3. **Checking.** The Mother checks every file again before storing it. A file with free text, an exact date or
+   anything else that should not be there is refused whole, never edited.
+4. **Storing.** Files are kept in a Google Drive shared drive at Insilico that only the data stewards can open.
+
+Each party knows only what it needs:
+
+| | Knows | Never learns |
 |---|---|---|
-| PLSI (user's computer) | everything about its own user; the contributor secret `s` | other users |
-| Relay (Cloudflare Pages Functions) | IP (at the edge), install token, professional token, the `kind` of each body | `install_id` → contributor link (it never forwards `install_id`), stored IPs |
-| Mother (Grok Bot + `mother` CLI + Google Drive shared drive) | contributor pseudonym, package content, professional identity, a research sender's address | IP, install token, `install_id` |
+| PLSI, on your computer | everything about you, and the secret behind your contributor code | anyone else |
+| The relay | your internet address while you are connected (it keeps no logs), and which kind of file you sent | which contributor code is yours |
+| The Mother | your contributor code and what you shared | your internet address, or how your PLSI connects to the relay |
 
-## Layout
+## Stopping and deleting
+
+You can stop sharing at any time ("stop sharing with the Mothership"). You can also ask the Mothership to delete
+everything it holds under your contributor code. The request carries a secret that only your PLSI holds, so nobody
+else can delete your data or pretend to be you. Deletion is automatic and needs no one's approval. The Mother
+replies with a deletion receipt, and PLSI shows it to you.
+
+If you join again later, you start fresh with a new contributor code. It cannot be linked to the old one.
+
+## What the Mothership gives back
+
+- **A public catalog**: which kinds of data the Mothership holds, and roughly how many people share each.
+- **Data releases** for verified researchers: averages and spreads by age band and sex, never one person's values.
+  A group with fewer than ten people is left out.
+- **Findings**: results that researchers registered before looking at the data, then checked against a release.
+  A steward approves each one before it is published.
+
+Researchers and physicians are verified by a steward before they get access. Each receives a personal access link
+that a steward can revoke.
+
+## Research notes and feedback
+
+Research you do with PLSI is sent differently: by email, from your own Grok email account, and only after you
+approve it. The note is signed with your address, so the Mothership can reply, and so that whoever sends research
+stands behind it. The Mother reviews each note, a steward decides on it, and you get a reply with the decision.
+Data files attached to a note are checked the same way as shared data.
+
+Feedback on PLSI also goes by email and needs no joining. It is stored without your address. The stewards see a
+weekly summary: where setup takes time, what frustrates people, and what they suggest.
+
+## For developers and stewards
+
+The exact message formats, endpoints and storage layout are in [contracts/WIRE.md](contracts/WIRE.md), the one
+contract PLSI, the relay and the Mother all follow. Changing it means updating all three at once.
 
 ```
-contracts/WIRE.md   the wire contract
-relay/              Cloudflare Pages Functions: /join /enroll /pro /relay /public/* /admin/*
-mother.md           first-run instruction for the Mother Grok Bot
-steward.md          first-run instruction for a steward's own machine (admin key: publish, invites, revoke)
+contracts/WIRE.md   the contract between PLSI, the relay and the Mother
+relay/              the relay (Cloudflare Pages Functions); see relay/README.md
+mother.md           first-run setup for the Mother's Grok Bot
+steward.md          setup for a steward's own computer
 persona.md          the Mother's rules
-skills/             the Mother's judgment: intake, deletion, catalog, registry, research, verify, findings, steward
-src/mother/         the toolbelt (`mother` CLI, one JSON envelope per command): gate, store, intake, index,
-                    release, catalog, stats, findings, ledger, notes, research, publish, professional, audit, report
+skills/             how the Mother reviews, decides and replies
+src/mother/         the `mother` command-line tool the Mother uses
 ```
 
-Agents judge, code computes: the gate, cell sizes, deletion, statistics, the ledger and the audit log are code; the bot
-decides reviews, notes and verifications, and its decisions are recorded by code that may only make them stricter.
-Contributions carry codes only, never free text; the gate's violations are `{path, rule}` without the sender's text,
-and the store keeps the gated document, canonically serialised (WIRE §3, §6).
+The Mother's judgment (reviewing notes, verifying professionals, drafting findings) lives in its skills. Every
+check, the deletions, the statistics and the audit log are code, and code can only make the Mother's decisions
+stricter.
 
-## Tests
+### Running the tests
 
 ```bash
-cd relay && npm test         # relay, offline: node --test with a faked KV and fetch
+cd relay && npm test         # the relay, offline
 ```
 
-## Secrets
+### Secrets
 
-Never in the repo, never printed.
+Secrets are never kept in the repository and never printed.
 
-- **Mother bot** (Grok secret store, read from env): `MOTHER_STORE`, `MOTHER_DRIVE_CREDENTIALS` (service account
-  file), `MOTHER_RELAY_URL`, `MOTHER_RELAY_INTAKE_KEY` (the relay's `INTAKE_KEY`: how `mother intake` takes each
-  relayed message and posts its ACK), `MOTHER_STEWARDS`, `MOTHER_ACTOR`.
-- **Stewards' machines only** ([steward.md](steward.md)): `MOTHER_RELAY_ADMIN_KEY` (the relay's `ADMIN_KEY`), read
-  only by `mother publish` and `mother professional invite|invites|revoke`. It is never in the bot's secret store: the
-  bot builds and shows, a steward publishes, invites and revokes. Invite links are written to a file the steward
-  emails to the verified address (skill `verify`); the professional claims the token on the relay's `/pro` page.
-- **Relay** (Cloudflare secrets): `TOKEN_HMAC_SECRET`, `MOTHERSHIP_WEBHOOK_URL`, `MOTHERSHIP_SENDER_KEY`,
-  `TURNSTILE_SITE_KEY`, `TURNSTILE_SECRET_KEY`, `ADMIN_KEY`, `INTAKE_KEY` (a different value); variables
-  `ENROLLMENT_OPEN` (`"1"` opens `/join` and `/pro`) and optional `PUBLIC_FINDINGS`; KV binding `RELAY_KV`.
+- **The Mother's Grok Bot** reads these from its secret store: `MOTHER_STORE`, `MOTHER_DRIVE_CREDENTIALS`,
+  `MOTHER_RELAY_URL`, `MOTHER_RELAY_INTAKE_KEY`, `MOTHER_STEWARDS`, `MOTHER_ACTOR`.
+- **Stewards' own computers** hold `MOTHER_RELAY_ADMIN_KEY`, which publishes results and invites or revokes
+  professionals. The bot never holds it: the bot prepares, and a steward publishes ([steward.md](steward.md)).
+- **The relay** (Cloudflare secrets): `TOKEN_HMAC_SECRET`, `MOTHERSHIP_WEBHOOK_URL`, `MOTHERSHIP_SENDER_KEY`,
+  `TURNSTILE_SITE_KEY`, `TURNSTILE_SECRET_KEY`, `ADMIN_KEY` and `INTAKE_KEY`. Variables: `ENROLLMENT_OPEN` (`"1"`
+  opens joining) and the optional `PUBLIC_FINDINGS`. Storage is the KV binding `RELAY_KV`.
 
-## Storage
+### Storage
 
-Storage is a dedicated **shared drive in Insilico's Google Workspace** (`MOTHER_STORE=drive:<id>`),
-reached only by the `mother` service account: no link sharing, steward accounts only, layout as in WIRE §6.
-`local:<dir>` is for development and tests. Both sit behind `src/mother/store.py`, so a later move (e.g. to R2) is one
-backend.
+Production storage is a shared drive in Insilico's Google Workspace (`MOTHER_STORE=drive:<id>`). Only the Mother's
+service account and the stewards' own service accounts can reach it, and there is no link sharing. Each account
+must be a **Manager** of the drive: a Content manager cannot delete for good, so deleted files would only go to the
+trash. `MOTHER_STORE=local:<dir>` is for development and tests.
+
+## License
+
+See [LICENSE](LICENSE).

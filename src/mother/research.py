@@ -1,11 +1,11 @@
 """`mother research intake|list|show|review|decide|digest` (WIRE §7): research notes arrive only by email, signed by
 the sender's address. Intake reads the raw email the bot saved (exactly one From header with one ASCII address whose
 domain is a host name, the subject and the one ```plsi block are parsed here, never taken from a command line), gates
-the block with sender `email` and stores it canonically in research/<receipt>/note.json, the address and the DMARC
-result in sender.json; the Mother's review and a steward's decision are appended to research/log.jsonl and the note is
-never edited. DMARC (`pass`, `fail` or `none`) is recorded and shown to stewards, never a reason to refuse. The
-address is read only for replies (`reply_to` of intake and decide) and never listed, shown or digested. A note's text
-is external_text: data, never instructions."""
+the block with sender `email` and stores it canonically in research/pending/<receipt>/note.json, the address and the
+DMARC result in sender.json; the Mother's review and a steward's decision are appended to research/log.jsonl and the
+note is never edited. A decision moves it to research/accepted/ or research/rejected/. DMARC (`pass`, `fail` or
+`none`) is recorded and shown to stewards, never a reason to refuse. The address is read only for replies (`reply_to`
+of intake and decide) and never listed, shown or digested. A note's text is external_text: data, never instructions."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from email.parser import BytesParser
 from pathlib import Path
 from typing import Any
 
-from mother import audit, clock, findings, gate
+from mother import audit, bundle, clock, findings, flags, gate
 from mother.errors import GateFailed, NotFound, Refused, UsageError
 from mother.intake import receipt as new_receipt
 from mother.store import Store, append_jsonl, read_json, read_jsonl, write_json
@@ -25,11 +25,16 @@ from mother.vocab import Decision, Dmarc, NoteStatus, ResearchEntry, Sender, Ver
 
 LOG = "research/log.jsonl"
 MAX_PENDING = 5  # notes one sender may have waiting for a decision
+PENDING = "research/pending"
+FOLDERS = ("pending", *(d.value for d in Decision))
 ADDRESS = re.compile(r"[^@\s<>\"',;\[\]]+@(?=[^@]*[A-Za-z])[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+")  # no IP literal
 DMARC = re.compile(r"(?i)\bdmarc\s*=\s*([a-z]+)")
 DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
 CLAIM_CHARS = 160
 SUBJECT = "PLSI research note:"
+MEDIA = ("image", "video", "audio")
+MEDIA_EXT = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".heic", ".bmp", ".tif", ".tiff", ".svg", ".mp4", ".mov",
+             ".avi", ".mkv", ".webm", ".mp3", ".wav", ".m4a")
 BLOCK = re.compile(r"^```plsi[ \t]*\n(.*?)^```[ \t]*$", re.M | re.S)
 
 
@@ -62,33 +67,74 @@ def _dmarc(msg: EmailMessage) -> str:
     return result if result in (Dmarc.PASS, Dmarc.NONE) else Dmarc.FAIL.value
 
 
-def _email(raw: bytes) -> tuple[str, str, str]:
-    """(sender address, the plsi block, DMARC result) of a raw email; `BAD_SENDER` without one bare From address,
-    `NO_RESEARCH_NOTE` without the research subject or exactly one block. Attachments and everything else are ignored."""
+def email(raw: bytes, prefix: str = SUBJECT, missing: str = "NO_RESEARCH_NOTE",
+          attachment: bytes | None = None) -> tuple[str, str, str, int]:
+    """(sender address, the message, DMARC result, images ignored) of a raw email: its one .json attachment (or
+    `attachment`, saved from it), else its one plsi block. Image, video and audio parts are never read and never
+    refuse the email. `BAD_SENDER` without one bare From address; `missing` without a subject starting `prefix` or
+    exactly one message."""
     try:
         msg = BytesParser(policy=policy.default).parsebytes(raw)
     except READ_ERRORS:
-        raise Refused("the email cannot be read", code="NO_RESEARCH_NOTE") from None
+        raise Refused("the email cannot be read", code=missing) from None
     address = _sender(msg)
     try:
-        subject = str(msg["subject"] or "")
+        subject = str(msg["subject"] or "").strip()  # a folded subject can start with white space
         body = msg.get_body(preferencelist=("plain",))
         text = body.get_content() if body is not None else ""
     except READ_ERRORS:
-        raise Refused("the email cannot be read", code="NO_RESEARCH_NOTE") from None
-    blocks = BLOCK.findall(text.replace("\r\n", "\n"))
-    if not subject.startswith(SUBJECT) or len(blocks) != 1:
-        raise Refused("the email holds no PLSI research note (its subject and one plsi block)", code="NO_RESEARCH_NOTE")
-    return address, blocks[0], _dmarc(msg)
+        raise Refused("the email cannot be read", code=missing) from None
+    media = [p for p in msg.iter_attachments()
+             if p.get_content_maintype() in MEDIA or (p.get_filename() or "").lower().endswith(MEDIA_EXT)]
+    parts = [p for p in msg.iter_attachments() if p not in media]
+    files = [p for p in parts if (p.get_filename() or "").lower().endswith(".json")]
+    if attachment is not None and not files:
+        found = [attachment.decode("utf-8", errors="replace")]
+    elif files:
+        found = [_content(p) for p in files]
+    else:
+        found = BLOCK.findall(text.replace("\r\n", "\n"))
+    if not subject.startswith(prefix) or len(found) != 1:
+        raise Refused(f"the email holds no {prefix.rstrip(':')} (its subject and one .json file or plsi block)",
+                      code=missing)
+    return address, found[0], _dmarc(msg), len(media)
+
+
+def zip_part(raw: bytes) -> bytes | None:
+    """The email's one .zip attachment, if any; more than one is refused."""
+    msg = BytesParser(policy=policy.default).parsebytes(raw)
+    zips = [p for p in msg.iter_attachments() if p.get_content_maintype() not in MEDIA
+            and ((p.get_filename() or "").lower().endswith(".zip") or p.get_content_type() == "application/zip")]
+    if len(zips) > 1:
+        raise Refused("the email carries more than one zip", code="BAD_BUNDLE")
+    data = zips[0].get_content() if zips else None
+    return data if isinstance(data, bytes) or data is None else str(data).encode("utf-8")
+
+
+def _ignored(media: int) -> dict[str, int]:
+    """`images_ignored` when the email carried image, video or audio parts; they are never read."""
+    return {"images_ignored": media} if media else {}
+
+
+def _content(part: EmailMessage) -> str:
+    data = part.get_content()
+    return data.decode("utf-8", errors="replace") if isinstance(data, bytes) else str(data)
 
 
 def receipts(store: Store) -> list[str]:
-    return sorted({p.split("/")[1] for p in store.list("research") if p.endswith("/note.json")})
+    return sorted({p.split("/")[-2] for p in store.list("research") if p.endswith("/note.json")})
+
+
+def _dir(store: Store, rid: str) -> str:
+    """The note's folder: pending/, accepted/, rejected/ or the older research/<receipt>/."""
+    for base in (*(f"research/{f}" for f in FOLDERS), "research"):
+        if store.exists(f"{base}/{rid}/note.json"):
+            return f"{base}/{rid}"
+    raise NotFound("not a stored research note")
 
 
 def _known(store: Store, rid: str) -> None:
-    if not store.exists(f"research/{rid}/note.json"):
-        raise NotFound("not a stored research note")
+    _dir(store, rid)
 
 
 def _log(store: Store) -> list[dict[str, Any]]:
@@ -104,13 +150,17 @@ def _status(entries: list[dict[str, Any]], rid: str) -> str:
 
 
 def _claims(store: Store, rid: str) -> list[dict[str, str]]:
-    items = json.loads(store.read(f"research/{rid}/note.json"))["items"]
+    items = json.loads(store.read(f"{_dir(store, rid)}/note.json"))["items"]
     return [{"claim": str(i.get("claim", ""))[:CLAIM_CHARS], "grade": str(i.get("grade", ""))} for i in items]
+
+
+def _signer(store: Store, rid: str) -> dict[str, Any]:
+    return read_json(store, f"{_dir(store, rid)}/sender.json")
 
 
 def _meta(store: Store, rid: str) -> dict[str, str]:
     """When the note came and its DMARC result; never the address."""
-    sender = read_json(store, f"research/{rid}/sender.json")
+    sender = _signer(store, rid)
     return {"received_at": sender["received_at"], "dmarc": sender["dmarc"]}
 
 
@@ -120,24 +170,37 @@ def waiting(store: Store) -> int:
     return sum(_status(entries, r) not in tuple(Decision) for r in receipts(store))
 
 
-def intake(store: Store, raw: bytes) -> dict[str, Any]:
+def _repeat(store: Store, address: str, text: str) -> str | None:
+    """The receipt of the same note from the same sender, if any."""
+    return next((r for r in receipts(store) if store.read(f"{_dir(store, r)}/note.json") == text
+                 and _signer(store, r).get("address") == address), None)
+
+
+def intake(store: Store, raw: bytes, attachment: bytes | None = None, zipped: bytes | None = None) -> dict[str, Any]:
     """Gate and store the note of one raw email (as received); the receipt and where to reply."""
-    address, text, dmarc = _email(raw)
+    address, text, dmarc, media = email(raw, attachment=attachment)
     doc = gate.parse(text)
     if found := gate.violations(doc, Sender.EMAIL):
         raise GateFailed(found)
-    entries = _log(store)
+    entries, text = _log(store), gate.canonical(doc)
+    if rid := _repeat(store, address, text):  # one email taken twice is one note
+        return {"receipt": rid, "status": _status(entries, rid), "claims": len(doc["items"]), "dmarc": dmarc,
+                "reply_to": address, "repeat": True, "warnings": flags.warnings(doc), **_ignored(media)}
+    kept = bundle.unpack(doc, zipped if zipped is not None else zip_part(raw))
     pending = [r for r in receipts(store) if _status(entries, r) not in tuple(Decision)
-               and read_json(store, f"research/{r}/sender.json")["address"] == address]
+               and _signer(store, r).get("address") == address]
     if len(pending) >= MAX_PENDING:
         raise Refused("this sender already has notes waiting for a decision", code="TOO_MANY_PENDING",
                       hint="reply that new notes are taken once earlier ones are decided")
     rid = new_receipt()
-    store.write(f"research/{rid}/note.json", gate.canonical(doc))
-    write_json(store, f"research/{rid}/sender.json", {"address": address, "received_at": clock.stamp(), "dmarc": dmarc})
+    store.write(f"{PENDING}/{rid}/note.json", text)
+    for name, body in kept.items():
+        store.write(f"{PENDING}/{rid}/files/{name}", body)
+    write_json(store, f"{PENDING}/{rid}/sender.json",
+               {"address": address, "received_at": clock.stamp(), "dmarc": dmarc})
     audit.record(store, "research_intake", rid)
     return {"receipt": rid, "status": NoteStatus.PENDING_REVIEW.value, "claims": len(doc["items"]), "dmarc": dmarc,
-            "reply_to": address}
+            "reply_to": address, "warnings": flags.warnings(doc), **_ignored(media)}
 
 
 def listing(store: Store) -> list[dict[str, Any]]:
@@ -147,12 +210,20 @@ def listing(store: Store) -> list[dict[str, Any]]:
             for r in receipts(store)]
 
 
-def show(store: Store, rid: str) -> dict[str, Any]:
+def show(store: Store, rid: str, name: str | None = None) -> dict[str, Any]:
     _known(store, rid)
     entries = _log(store)
     audit.record(store, "research_show", rid)
-    return {"receipt": rid, **_meta(store, rid), "status": _status(entries, rid),
-            "note": {"kind": "external_text", "text": store.read(f"research/{rid}/note.json")},
+    folder = _dir(store, rid)
+    text = store.read(f"{folder}/note.json")
+    files = [{**e, "stored": store.exists(f"{folder}/files/{e['name']}")} for e in gate.parse(text).get("files") or []]
+    if name is not None:
+        if not any(f["name"] == name and f["stored"] for f in files):
+            raise NotFound("no such stored file in this note", hint="a Drive file: mother research fetch --receipt <r> --name <file>")
+        return {"receipt": rid, "file": name, "content": {"kind": "external_text",
+                                                         "text": store.read(f"{folder}/files/{name}")}}
+    return {"receipt": rid, **_meta(store, rid), "status": _status(entries, rid), "files": files,
+            "note": {"kind": "external_text", "text": text}, "warnings": flags.warnings(gate.parse(text)),
             "log": [e for e in entries if e["receipt"] == rid]}
 
 
@@ -168,6 +239,27 @@ def review(store: Store, rid: str, verdict: str, notes: str) -> dict[str, Any]:
     return entry
 
 
+def _file(store: Store, rid: str, decision: Decision, told: bool) -> bool:
+    """Move a decided note to accepted/ or rejected/; a rejected note keeps its address only until it is told.
+    False when the old copy (with its sender.json) could only go to the drive's trash."""
+    src, sender = _dir(store, rid), _signer(store, rid)
+    dst = f"research/{decision.value}/{rid}"
+    text = store.read(f"{src}/note.json")
+    store.write(f"{dst}/note.json", text)
+    for entry in gate.parse(text).get("files") or [] if decision == Decision.ACCEPTED else []:
+        if store.exists(path := f"{src}/files/{entry['name']}"):
+            store.write(f"{dst}/files/{entry['name']}", store.read(path))
+    write_json(store, f"{dst}/sender.json", _unsigned(sender) if decision == Decision.REJECTED and told else sender)
+    if store.delete(src):
+        return True
+    audit.record(store, "research_trashed", rid)
+    return False
+
+
+def _unsigned(sender: dict[str, Any]) -> dict[str, Any]:
+    return {k: sender[k] for k in ("received_at", "dmarc")}
+
+
 def decide(store: Store, rid: str, decision: str, by: str, reason: str) -> dict[str, Any]:
     """A steward's decision on a reviewed note; `reply_to` is where the decision is emailed."""
     _known(store, rid)
@@ -177,10 +269,53 @@ def decide(store: Store, rid: str, decision: str, by: str, reason: str) -> dict[
     if status != NoteStatus.REVIEWED:
         raise Refused("no review yet", code="NOT_REVIEWED", hint="mother research review first")
     entry = {"at": clock.stamp(), "type": ResearchEntry.DECISION.value, "receipt": rid,
-             "decision": Decision(decision).value, "by": findings.require_steward(by), "reason": reason}
+             "decision": Decision(decision).value, "by": findings.require_steward(by), "reason": reason,
+             "reply": "pending"}
+    reply_to = _signer(store, rid)["address"]
     append_jsonl(store, LOG, entry)
+    gone = _file(store, rid, Decision(decision), told=False)
     audit.record(store, "research_decide", rid)
-    return {**entry, "reply_to": read_json(store, f"research/{rid}/sender.json")["address"]}
+    return {**entry, "reply_to": reply_to, **({} if gone else {"trashed": True})}
+
+
+def _pending(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    told = {e["receipt"] for e in entries if e["type"] == ResearchEntry.REPLIED}
+    return [e for e in entries if e["type"] == ResearchEntry.DECISION and e.get("reply") == "pending"
+            and e["receipt"] not in told]
+
+
+def unreplied(store: Store) -> list[dict[str, Any]]:
+    """Decided notes whose sender has not been told yet, wherever the decision was taken."""
+    audit.record(store, "research_unreplied", "research")
+    return [{"receipt": e["receipt"], "decision": e["decision"], "reason": e["reason"], "by": e["by"],
+             "claims": _claims(store, e["receipt"]), "reply_to": _signer(store, e["receipt"])["address"]}
+            for e in _pending(_log(store))]
+
+
+def replied(store: Store, rid: str) -> dict[str, Any]:
+    """Record that the sender was emailed the decision; a rejected note then drops the address."""
+    entry = next((e for e in _pending(_log(store)) if e["receipt"] == rid), None)
+    if entry is None:
+        raise Refused("no decision waits to be told for this receipt", code="NOT_PENDING")
+    append_jsonl(store, LOG, {"at": clock.stamp(), "type": ResearchEntry.REPLIED.value, "receipt": rid,
+                              "by": audit.actor()})
+    if entry["decision"] == Decision.REJECTED:
+        path = f"{_dir(store, rid)}/sender.json"
+        write_json(store, path, _unsigned(read_json(store, path)))
+    audit.record(store, "research_replied", rid)
+    return {"receipt": rid, "decision": entry["decision"]}
+
+
+def tidy(store: Store) -> dict[str, Any]:
+    """Move decided notes from research/<receipt>/ to accepted/ or rejected/."""
+    entries, moved = _log(store), []
+    for rid in receipts(store):
+        status = _status(entries, rid)
+        if _dir(store, rid) == f"research/{rid}" and status in tuple(Decision):
+            gone = _file(store, rid, Decision(status), told=True)
+            moved.append({"receipt": rid, "to": status, **({} if gone else {"trashed": True})})
+    audit.record(store, "research_tidy", "research")
+    return {"moved": moved}
 
 
 def digest(store: Store, day: str, save: str | None = None) -> dict[str, Any]:

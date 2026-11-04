@@ -9,12 +9,12 @@ from typing import Any
 
 from mother.contribution import AGE_BANDS
 from mother.errors import Refused
-from mother.vocab import Op, Sex
+from mother.vocab import Ethnicity, Op, Sex
 
-GROUP_KEYS = frozenset({"age_band", "sex"})
+GROUP_KEYS = frozenset({"age_band", "sex", "ethnicity"})
 GROUP_SEXES = (Sex.F, Sex.M)
 SPEC_KEYS = {Op.COMPARE_GROUPS: {"op", "map_id", "coordinate", "group_a", "group_b"},
-             Op.AGE_TREND: {"op", "map_id", "coordinate", "sex"}}
+             Op.AGE_TREND: {"op", "map_id", "coordinate", "sex", "ethnicity"}}
 REQUIRED = {"op", "map_id", "coordinate"}
 
 
@@ -77,7 +77,7 @@ def problems(spec: Any) -> list[str]:
     out = [f"missing {k}" for k in sorted(REQUIRED - set(spec))]
     out += ["an unknown field"] if set(spec) - SPEC_KEYS[Op(spec["op"])] else []
     out += [f"{k} must be a string" for k in ("map_id", "coordinate") if not isinstance(spec.get(k, ""), str)]
-    groups = [spec.get("group_a"), spec.get("group_b")] if spec["op"] == Op.COMPARE_GROUPS else [{"sex": spec.get("sex")}]
+    groups = [spec.get("group_a"), spec.get("group_b")] if spec["op"] == Op.COMPARE_GROUPS else [_trend_group(spec)]
     for g in groups:
         if not isinstance(g, dict) or set(g) - GROUP_KEYS:
             out.append(f"groups hold only {', '.join(sorted(GROUP_KEYS))}")
@@ -85,7 +85,13 @@ def problems(spec: Any) -> list[str]:
             out.append("sex must be F or M")
         elif g.get("age_band") is not None and not (isinstance(g["age_band"], str) and g["age_band"] in AGE_BANDS):
             out.append("age_band must be an age band")
+        elif g.get("ethnicity") is not None and g["ethnicity"] not in tuple(Ethnicity):
+            out.append(f"ethnicity must be one of {', '.join(Ethnicity)}")
     return out
+
+
+def _trend_group(spec: dict[str, Any]) -> dict[str, Any]:
+    return {k: spec.get(k) for k in ("sex", "ethnicity")}
 
 
 def _pool(cells: list[dict[str, Any]]) -> tuple[int, float, float]:
@@ -132,7 +138,7 @@ def _midpoint(band: str) -> float:
 
 def age_trend(release: dict[str, Any], spec: dict[str, Any]) -> dict[str, Any]:
     bands: dict[str, list[dict[str, Any]]] = {}
-    for c in _matching(release, spec, {"sex": spec.get("sex")}):
+    for c in _matching(release, spec, _trend_group(spec)):
         bands.setdefault(c["age_band"], []).append(c)
     if len(bands) < 3:
         raise Refused("age_trend needs at least 3 age bands", code="too_few_cells")
