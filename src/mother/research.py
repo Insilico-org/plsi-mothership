@@ -16,8 +16,8 @@ import unicodedata
 from collections import defaultdict
 from typing import Any
 
-from mother import audit, bundle, clock, flags, gate, mail
-from mother.errors import NotFound, Refused
+from mother import __version__, audit, bundle, clock, flags, gate, mail
+from mother.errors import GateFailed, NotFound, Refused
 from mother.store import Store, append_jsonl, new_receipt, read_json, read_jsonl, write_json
 from mother.vocab import DECIDED, Decision, NoteStatus, ResearchEntry, Sender, Verdict
 
@@ -27,6 +27,7 @@ PENDING = "research/pending"
 SENDERS = "research/senders.json"  # address -> pseudonymous folder id; an address leaves it with its last note
 CLAIM_CHARS = 160
 SUBJECT = "PLSI research note:"
+BEFORE_VERSION = (0, 2)  # the release of a file with no plsi_version: PLSI before 0.3.0 sent none
 Log = dict[str, list[dict[str, Any]]]  # receipt -> its log entries, in order
 
 
@@ -139,11 +140,38 @@ def _answer(doc: dict[str, Any], rid: str, status: str, dmarc: str, address: str
             **extra, "warnings": flags.warnings(doc), **_project(doc), **mail.ignored(media)}
 
 
+def _release(version: Any) -> tuple[int, int] | None:
+    """The major.minor of a version string; a patch release never asks anyone to update."""
+    found = re.match(r"(\d+)\.(\d+)", str(version))
+    return (int(found[1]), int(found[2])) if found else None
+
+
+def _outdated(text: str) -> str | None:
+    """The hint for a refused note whose PLSI release is older than this Mother's, else None."""
+    try:
+        doc = json.loads(text)
+    except ValueError:
+        return None
+    if not isinstance(doc, dict):
+        return None
+    given = doc.get("plsi_version")
+    theirs, ours = BEFORE_VERSION if given is None else _release(given), _release(__version__)
+    if theirs is None or ours is None or theirs >= ours:
+        return None
+    shown, needed = "before 0.3.0" if given is None else given, f"{ours[0]}.{ours[1]}"
+    return (f"made by PLSI {shown}, older than this Mothership ({needed}): tell the sender to update PLSI to "
+            f"{needed} or later and send the note again")
+
+
 def intake(store: Store, raw: bytes, attachment: bytes | None = None, zipped: bytes | None = None) -> dict[str, Any]:
     zipped = zipped if zipped is not None else mail.zip_part(raw)
     inner = bundle.note_in(zipped) if attachment is None else None
     address, text, dmarc, media = mail.read(raw, SUBJECT, "NO_RESEARCH_NOTE", attachment or inner)
-    doc = gate.checked(text, Sender.EMAIL)
+    try:
+        doc = gate.checked(text, Sender.EMAIL)
+    except GateFailed as exc:
+        exc.hint = _outdated(text) or exc.hint
+        raise
     log, folders, text = _log(read_jsonl(store, LOG)), _folders(store), gate.canonical(doc)
     mine = [r for r, at in folders.items() if _signer(store, at).get("address") == address]
     if rid := next((r for r in mine if store.read(f"{folders[r]}/note.json") == text), None):

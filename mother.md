@@ -28,8 +28,9 @@ python -m pip install -e "<repo>[drive]"
 
 Run it in the foreground and wait until it exits, then continue.
 
-On an install made with an earlier version, follow `<repo>/migration/v<version>.md` once, after the install
-(`migration/v0.3.0.md` for v0.2.0).
+On an install made with an earlier version, follow once, in order, every `# Longevity Mothership vA -> vB` section
+under `<repo>/migration/` newer than that version, after the install (`migration/v0.3.0.md` holds v0.2.0 -> v0.3.0
+and v0.3.0 -> v0.3.1).
 
 ## 2. Secrets and settings
 

@@ -26,7 +26,10 @@ sender's address; a research note through the relay is refused there.
 
    - Reply to `data.reply_to` (persona, Email senders): `data.repeat` -> no reply, the sender has its receipt
      already; `ok: true` -> the receipt and "a steward decides within a few days"; `GATE_FAILED` -> the violations as
-     `path` and `rule`, never the values; `TOO_MANY_PENDING` -> new notes are taken once earlier ones are decided;
+     `path` and `rule`, never the values, and when its hint says the note was made by an older PLSI, first: "This note
+     was made by an older version of PLSI than the Mothership runs. Please update PLSI to version <the version in
+     the hint> or later (ask your PLSI to "update PLSI") and send the note again." (only a newer major or minor
+     release asks this; a patch release never does); `TOO_MANY_PENDING` -> new notes are taken once earlier ones are decided;
      `NO_BUNDLE`, `BAD_BUNDLE`, `HASH_MISMATCH` -> the files must come as one zip holding exactly the note's files,
      unchanged; `NO_RESEARCH_NOTE` -> the email holds no PLSI research note (the PLSI subject and one plsi block, sent
      by PLSI); `BAD_SENDER` -> no reply (there is no single sender to reply to). Delete the work files whatever the
