@@ -16,10 +16,13 @@ GROUP_SEXES = (Sex.F, Sex.M)
 SPEC_KEYS = {Op.COMPARE_GROUPS: {"op", "map_id", "coordinate", "group_a", "group_b"},
              Op.AGE_TREND: {"op", "map_id", "coordinate", "sex", "ethnicity"}}
 REQUIRED = {"op", "map_id", "coordinate"}
+RESULT_DIGITS = 6  # significant digits of a result
+CELL_DIGITS = 4  # significant digits of a release cell
+INTERVAL_ALPHA = 0.05  # the result interval is the 95% confidence interval
+REL_TOL, ABS_TOL = 1e-6, 1e-12  # how close a recomputed result must be to the submitted one
 
 
 def sig(x: float, digits: int) -> float:
-    """`x` rounded to `digits` significant digits."""
     return float(f"{x:.{digits}g}")
 
 
@@ -110,9 +113,11 @@ def _matching(release: dict[str, Any], spec: dict[str, Any], group: dict[str, An
 def _result(effect: float, se: float, df: float, n: int) -> dict[str, Any]:
     if not se > 0:
         raise Refused("the cells have no spread, so the test is undefined", code="degenerate_fit")
-    q = t_quantile(0.05, df)
-    return {"effect": sig(effect, 6), "interval": [sig(effect - q * se, 6), sig(effect + q * se, 6)], "n": n,
-            "statistic": sig(effect / se, 6), "df": sig(df, 6), "p": sig(t_two_sided(effect / se, df), 6)}
+    q, t = t_quantile(INTERVAL_ALPHA, df), effect / se
+    raw = {"effect": effect, "interval": [effect - q * se, effect + q * se], "statistic": t, "df": df,
+           "p": t_two_sided(t, df)}
+    return {"n": n, **{k: [sig(x, RESULT_DIGITS) for x in v] if isinstance(v, list) else sig(v, RESULT_DIGITS)
+                       for k, v in raw.items()}}
 
 
 def compare_groups(release: dict[str, Any], spec: dict[str, Any]) -> dict[str, Any]:
@@ -159,7 +164,9 @@ def age_trend(release: dict[str, Any], spec: dict[str, Any]) -> dict[str, Any]:
 
 
 def run(release: dict[str, Any], spec: dict[str, Any]) -> dict[str, Any]:
-    """The §5 result of `spec` on `release`."""
     if found := problems(spec):
         raise Refused("; ".join(found), code="bad_spec")
-    return (compare_groups if spec["op"] == Op.COMPARE_GROUPS else age_trend)(release, spec)
+    return OPS[Op(spec["op"])](release, spec)
+
+
+OPS = {Op.COMPARE_GROUPS: compare_groups, Op.AGE_TREND: age_trend}

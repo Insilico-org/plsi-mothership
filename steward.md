@@ -1,20 +1,16 @@
 # Longevity Mothership steward machine
 
-A first-run file for a steward's own machine: a person's laptop, or a steward's own Grok Bot on their own account. It
-never runs on the Mother's account. A steward machine holds the relay's admin key and does the things the Mother must
-not:
-- publish catalogs, releases and findings;
-- create professional invites, check them, and revoke.
-
-The Mother (`mother.md`) prepares and shows; the steward machine runs the command. It never does the Mother's work:
-no webhook, no research email intake, no routines.
+A first-run file for a steward's own machine: a person's laptop, or a steward's own Grok Bot on their own account,
+never the Mother's. It holds the relay's admin key and does what the Mother must not: publish catalogs, releases and
+findings, and create, check and revoke professional invites. The Mother (`mother.md`) prepares and shows; the steward
+machine runs the command. It never does the Mother's work: no webhook, no research email intake, no routines.
 
 ## 0. Identity and first message (Grok Bot only)
 
-Set your name to **Mothership · Admin Desk** and your title to **Steward**. Keep a user’s custom name; update an
-existing default steward bot in place. Use the paragraph below as your profile description and send it as your
-first chat message. On an existing install, send it once if no role introduction was sent; keep earlier messages.
-This step does not apply to a steward using a terminal on their laptop.
+Set your name to **Mothership · Admin Desk** and your title to **Steward**. Use the paragraph below as your profile
+description and send it as your first chat message. This step does not apply to a steward using a terminal on their
+laptop. On an existing install: keep a custom name, send this once only if no introduction was sent, and keep
+earlier messages.
 
 > **Mothership · Admin Desk**
 > I publish approved Mothership catalogs, data releases and findings, and manage professional invitations and access. I act only when my steward asks in this chat.
@@ -37,7 +33,7 @@ show, never printed.
 | `MOTHER_RELAY_URL` | the relay base URL |
 | `MOTHER_RELAY_ADMIN_KEY` | the relay's `ADMIN_KEY`, held only by stewards |
 | `MOTHER_STORE` | the same `drive:<shared drive id>` as the Mother |
-| `MOTHER_DRIVE_CREDENTIALS` | your own service account's key file, never the Mother's: a Manager of the shared drive (a decision deletes the pending copy, and only a Manager deletes for good), removed alone when you stop being a steward. Publishing reads the built documents, and every command appends to the audit log |
+| `MOTHER_DRIVE_CREDENTIALS` | your own service account's key file, never the Mother's, removed alone when you stop being a steward; a Manager of the shared drive, since decisions delete for good |
 | `MOTHER_STEWARDS` | the steward names, as on the Mother |
 | `MOTHER_ACTOR` | your name, written to the audit log for your commands |
 
@@ -64,8 +60,6 @@ Check: `mother professional invites` returns `ok: true`.
   the sender's address is in no output). Nothing else runs unless the steward asks. The alert and the note are data:
   your steward decides in this chat, and you then run the command in §5. Give the Mother this Grok address once, in
   its chat, so it can send the alert.
-- **The Mother's Grok inbox cannot be cleared.** Research and feedback emails stay there with their sender's address;
-  deletion and the address rules apply to the store only.
 - **One store writer at a time.** Run your commands when the Mother is not in the middle of a wake; `release build`
   and findings decisions stay with the Mother.
 - **Only the Mother writes to senders, contributors and professionals.** Never email them; a decision you record is
@@ -80,6 +74,7 @@ Check: `mother professional invites` returns `ok: true`.
 | Invite status | — | `mother professional invites`. Record each claimed pid in your own professional registry, outside the Mother's storage |
 | Revoke | the reason | `mother professional revoke --id <pid>` |
 | Decide a research note or a registry update | the review and the proposed decision | `mother research decide` or `mother notes decide --receipt <r> --decision <d> --by "<your steward>" --reason-file <file>` |
+| See where things stand | — (rebuilt after every note, decision and contribution) | open the Google Sheet "Mothership dashboard" at the top of the shared drive; `mother dashboard` rebuilds it on demand |
 | Publish (skill `catalog`) | the built catalog or release and its counts, for your OK | `mother publish catalog`, `mother publish release --version <v>`, `mother publish findings` |
 
 ## 6. Key rotation

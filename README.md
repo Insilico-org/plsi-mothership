@@ -82,6 +82,8 @@ weekly summary: where setup takes time, what frustrates people, and what they su
 
 ## For developers and stewards
 
+Upgrading a running Mothership: `migration/v0.3.0.md` (the Mother bot and each steward's machine).
+
 The exact message formats, endpoints and storage layout are in [contracts/WIRE.md](contracts/WIRE.md), the one
 contract PLSI, the relay and the Mother all follow. Changing it means updating all three at once.
 
@@ -92,7 +94,7 @@ mother.md           first-run setup for the Mother's Grok Bot
 steward.md          setup for a steward's own computer
 persona.md          the Mother's rules
 skills/             how the Mother reviews, decides and replies
-src/mother/         the `mother` command-line tool the Mother uses
+src/mother/         the `mother` command-line tool the Mother uses; see src/mother/README.md
 ```
 
 The Mother's judgment (reviewing notes, verifying professionals, drafting findings) lives in its skills. Every
@@ -107,22 +109,15 @@ cd relay && npm test         # the relay, offline
 
 ### Secrets
 
-Secrets are never kept in the repository and never printed.
-
-- **The Mother's Grok Bot** reads these from its secret store: `MOTHER_STORE`, `MOTHER_DRIVE_CREDENTIALS`,
-  `MOTHER_RELAY_URL`, `MOTHER_RELAY_INTAKE_KEY`, `MOTHER_STEWARDS`, `MOTHER_ACTOR`.
-- **Stewards' own computers** hold `MOTHER_RELAY_ADMIN_KEY`, which publishes results and invites or revokes
-  professionals. The bot never holds it: the bot prepares, and a steward publishes ([steward.md](steward.md)).
-- **The relay** (Cloudflare secrets): `TOKEN_HMAC_SECRET`, `MOTHERSHIP_WEBHOOK_URL`, `MOTHERSHIP_SENDER_KEY`,
-  `TURNSTILE_SITE_KEY`, `TURNSTILE_SECRET_KEY`, `ADMIN_KEY` and `INTAKE_KEY`. Variables: `ENROLLMENT_OPEN` (`"1"`
-  opens joining) and the optional `PUBLIC_FINDINGS`. Storage is the KV binding `RELAY_KV`.
+Secrets are never kept in the repository and never printed. The Mother's are listed in [mother.md](mother.md) §2,
+a steward's (the relay's admin key, which the bot never holds) in [steward.md](steward.md) §2, and the relay's in
+[contracts/WIRE.md](contracts/WIRE.md) §4.
 
 ### Storage
 
-Production storage is a shared drive in Insilico's Google Workspace (`MOTHER_STORE=drive:<id>`). Only the Mother's
-service account and the stewards' own service accounts can reach it, and there is no link sharing. Each account
-must be a **Manager** of the drive: a Content manager cannot delete for good, so deleted files would only go to the
-trash. `MOTHER_STORE=local:<dir>` is for development and tests.
+Production storage is a shared drive in Insilico's Google Workspace (`MOTHER_STORE=drive:<id>`), reached only by the
+Mother's and the stewards' service accounts, each a **Manager** so deletions are final; there is no link sharing.
+`MOTHER_STORE=local:<dir>` is for development and tests.
 
 ## License
 

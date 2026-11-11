@@ -1,11 +1,11 @@
 ---
 name: verify
-description: Use when a physician or researcher asks to register with the Longevity Mothership, or a steward asks to renew or revoke a professional; the manual v0 review checklist, then a one-time invite, its status or a revocation, which a steward runs from their own terminal.
+description: Use when a physician or researcher asks to register with the Longevity Mothership, or a steward asks to renew or revoke a professional; the manual review checklist, then a one-time invite, its status or a revocation, which a steward runs from their own terminal.
 ---
 
-# Mother professional verification (v0, manual)
+# Mother professional verification (manual)
 
-Follow persona.md. Registration v0 is by invitation: a steward reviews every request by hand. Professional identity is
+Follow persona.md. Registration is by invitation: a steward reviews every request by hand. Professional identity is
 known and verified; it is never stored with, compared with or mentioned next to contributor data. Invites, their status
 and revocation need the relay's admin key, which only a steward's terminal holds: you prepare, the steward runs them.
 

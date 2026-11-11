@@ -2,8 +2,9 @@
 
 import { fail, html } from './http.js';
 
-// The static page public/<name>.html with the Turnstile widget (action = name), or a misconfigured notice, filled in.
-export async function page(request, env, name) {
+// GET /join or /pro: the static page public/<name>.html with the Turnstile widget (action = name) filled in.
+export async function page(request, env, path) {
+  const name = path.slice(1);
   const asset = env.ASSETS ? await env.ASSETS.fetch(new Request(new URL(`/${name}`, request.url))) : null;
   if (!asset || !asset.ok) return fail(`${name}_not_configured`, 503);
   const sk = String(env.TURNSTILE_SITE_KEY || '').replace(/[^0-9A-Za-z_-]/g, '');
@@ -14,15 +15,13 @@ export async function page(request, env, name) {
   return html((await asset.text()).replace('<!--WIDGET-->', widget).replace('<!--DISABLED-->', sk ? '' : ' disabled'));
 }
 
-// What /join and /pro show while ENROLLMENT_OPEN is not "1".
 export const closedPage = () => html(`<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Longevity Mothership: not open yet</title><link rel="stylesheet" href="/relay.css"></head>
 <body><h1>Not open yet</h1><p>The Longevity Mothership is not taking new members yet. Please come back later.</p></body></html>
 `, 503);
 
-// Null when the body's turnstileToken passes siteverify for this page's action and this request's hostname, else the
-// error Response (a token solved on another page or site does not count).
+// Null when the body's turnstileToken passes siteverify for this action and this request's hostname, else the error.
 export async function human(request, env, body, action) {
   const token = body && typeof body.turnstileToken === 'string' ? body.turnstileToken : '';
   if (!token || token.length > 2048) return fail('turnstile_required', 403);

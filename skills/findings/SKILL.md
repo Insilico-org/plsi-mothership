@@ -31,7 +31,7 @@ work; the code check comes first, your review second, a steward's decision last.
    `mother findings reject --id <f_id> --steward "<name>" --reason-file <file with the one-line reason>`.
    Free text never goes on the command line. Delete the text files afterwards.
 4. **Publish** after decisions: `mother findings fdr`, then a steward runs `mother publish findings` from their own
-   terminal (accepted findings in full, with q-values, plus counts of preregistrations, acceptances and rejections). The FDR uses the p the code recomputed in a
-   passing latest check; any other preregistration counts as p = 1.
+   terminal (accepted findings in full, with q-values, plus counts of preregistrations, acceptances and rejections).
+   The FDR uses the p the code recomputed in a passing latest check; any other preregistration counts as p = 1.
 
 The ledger is append-only: a correction is a new preregistration and finding that names the old one in `parents`.

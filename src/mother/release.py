@@ -5,16 +5,15 @@ size are left out and only counted. Releases are never rebuilt under the same ve
 
 from __future__ import annotations
 
-import json
 import statistics
 from typing import Any
 
 from mother import audit, clock, index
 from mother.contribution import number
-from mother.errors import Refused
-from mother.stats import sig
+from mother.errors import NotFound, Refused
+from mother.stats import CELL_DIGITS, sig
 from mother.store import Store, read_json, write_json
-from mother.vocab import ContributorStatus, Ethnicity
+from mother.vocab import Ethnicity
 
 MIN_CELL = 10
 
@@ -31,23 +30,9 @@ def path(version: str) -> str:
     return f"releases/{version}/release.json"
 
 
-def active(store: Store) -> dict[str, dict[str, Any]]:
-    """The index entries of contributors who have not withdrawn (`stop`): the only ones releases and the catalog count."""
-    return {cid: e for cid, e in index.load(store).items() if e.get("status") == ContributorStatus.ACTIVE}
-
-
-def packages(store: Store, cid: str, entry: dict[str, Any]) -> list[dict[str, Any]]:
-    """The contributor's stored contributions, in arrival order."""
-    return [json.loads(store.read(f"intake/{cid}/{r}.json")) for r in entry["receipts"]]
-
-
-def latest(docs: list[dict[str, Any]]) -> dict[str, Any] | None:
+def _latest(docs: list[dict[str, Any]]) -> dict[str, Any] | None:
     """The contribution with the latest `packed` month; the last to arrive among equals."""
-    best = None
-    for doc in docs:
-        if best is None or doc["packed"] >= best["packed"]:
-            best = doc
-    return best
+    return max(reversed(docs), key=lambda d: d["packed"], default=None)
 
 
 def _number(coordinate: dict[str, Any]) -> float | None:
@@ -60,9 +45,8 @@ def _number(coordinate: dict[str, Any]) -> float | None:
 
 
 def values(doc: dict[str, Any]) -> dict[tuple[str, str, str], float]:
-    """(map_id, coordinate, unit) -> value: one per cell key, from the state with the latest `as_of` (the last among
-    equals), however many states of one map a package holds. The gate checks the shape; anything malformed that is
-    stored anyway is skipped, so one package never stops a release."""
+    """(map_id, coordinate, unit) -> value, from the state with the latest `as_of` (the last among equals); anything
+    malformed is skipped, so one package never stops a release."""
     states = doc.get("states")
     states = [s for s in states if isinstance(s, dict) and isinstance(s.get("map_id"), str)
               and isinstance(s.get("coordinates"), dict)] if isinstance(states, list) else []
@@ -79,17 +63,16 @@ def values(doc: dict[str, Any]) -> dict[tuple[str, str, str], float]:
 def _cell(key: tuple[str, ...], vals: list[float]) -> dict[str, Any]:
     map_id, coordinate, unit, age_band, sex, ethnicity = key
     p25, p50, p75 = statistics.quantiles(vals, n=4, method="inclusive")
+    stat = {"mean": statistics.fmean(vals), "sd": statistics.stdev(vals), "p25": p25, "p50": p50, "p75": p75}
     return {"map_id": map_id, "coordinate": coordinate, "unit": unit, "age_band": age_band, "sex": sex,
-            "ethnicity": ethnicity, "n": len(vals), "mean": sig(statistics.fmean(vals), 4), "sd": sig(statistics.stdev(vals), 4),
-            "p25": sig(p25, 4), "p50": sig(p50, 4), "p75": sig(p75, 4)}
+            "ethnicity": ethnicity, "n": len(vals), **{k: sig(v, CELL_DIGITS) for k, v in stat.items()}}
 
 
 def compute(store: Store, version: str, min_cell: int = MIN_CELL) -> dict[str, Any]:
-    """The release document from the current intake (nothing is written)."""
     min_cell = floor(min_cell)
     groups: dict[tuple[str, ...], list[float]] = {}
-    for cid, entry in active(store).items():
-        doc = latest(packages(store, cid, entry))
+    for cid, entry in index.active(store).items():
+        doc = _latest(index.packages(store, cid, entry))
         subject = (doc or {}).get("subject", {})
         if not all(isinstance(subject.get(k), str) and subject[k] for k in ("age_band", "sex")):
             continue
@@ -109,8 +92,11 @@ def build(store: Store, version: str, min_cell: int = MIN_CELL) -> dict[str, Any
     write_json(store, path(version), doc)
     audit.record(store, "release_build", version)
     return {"version": version, "file": path(version), "cells": len(doc["cells"]),
-            "suppressed_cells": doc["suppressed_cells"], "min_cell": min_cell}
+            "suppressed_cells": doc["suppressed_cells"], "min_cell": doc["min_cell"]}
 
 
 def load(store: Store, version: str) -> dict[str, Any]:
-    return read_json(store, path(version))
+    try:
+        return read_json(store, path(version))
+    except NotFound:
+        raise NotFound("the release is not built", hint="mother release build --version <v>") from None

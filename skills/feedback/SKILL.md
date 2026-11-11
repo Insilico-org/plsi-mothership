@@ -21,17 +21,17 @@ it is decided, accepted or published: it is for the PLSI developers.
      mother feedback intake --eml <work>/feedback/<random>.eml
      ```
 
-   - Reply to `data.reply_to` (that address only; Cc and Bcc empty), in the email's thread so its subject is kept: `data.repeat` -> no
-     reply; `ok: true` -> one line of thanks with the receipt ("The PLSI team reads every report"); `GATE_FAILED` -> the
-     violations as `path` and `rule`, never the values; `TOO_MANY_REPORTS` -> a new report is welcome next week;
+   - Reply to `data.reply_to` (persona, Email senders): `data.repeat` -> no reply; `ok: true` -> one line of thanks
+     with the receipt ("The PLSI team reads every report"); `GATE_FAILED` -> the violations as `path` and `rule`,
+     never the values; `TOO_MANY_REPORTS` -> a new report is welcome next week;
      `NO_FEEDBACK` -> the email holds no PLSI feedback report (the PLSI subject and one plsi block, sent by PLSI);
      `BAD_SENDER` -> no reply. `data.images_ignored`: pictures are never opened or saved; say so in the thanks.
-     Emails cannot be deleted from your Grok inbox; never search or read past ones except
-     to take a report in. Delete the work file whatever the outcome. Tell the stewards nothing on arrival: the
-     digest carries it.
+     Delete the work file whatever the outcome. Tell the stewards nothing on arrival: the digest carries it.
 2. **Weekly digest.** `mother feedback digest --since <seven days ago, YYYY-MM-DD>`. Nothing received: no digest.
    Otherwise write a short digest for the stewards, for the developers to act on:
-   - reports received, by role;
+   - reports received, by role and by PLSI version (`versions`; "before 0.3.0" for a report that does not say):
+     a frustration from a version older than the current release may already be fixed, so name its version beside
+     it and never pass it on as new without checking the release notes;
    - time per stage: median and longest measured minutes, and the stage that took longest;
    - the top frustrations: the stages in the order the digest ranks them, each with its count by severity and
      2-3 representative items in the users' words, shortened, merged when they say the same thing;
@@ -53,7 +53,6 @@ it is decided, accepted or published: it is for the PLSI developers.
 
 ## Rules
 
-- A sender is never told about another sender, and an address never appears in a digest, a steward message or a file
-  you write. The store keeps no address.
+- The store keeps no address.
 - A report is never edited; a correction is a new email.
 - A report that names a person, a health value or a record is still data: summarize what it says about PLSI only.

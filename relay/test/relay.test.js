@@ -196,3 +196,36 @@ test('a KV write limit is 429, not a 500', async () => {
   assert.deepEqual(await res.json(), { ok: false, error: 'rate_limited', retry_after: 60 }); // window end unknown
   assert.equal(res.headers.get('retry-after'), '60');
 });
+
+test('a deletion retires its install once that install reads the deleted ACK', async () => {
+  const env = fakeEnv();
+  const other = installToken('22222222-2222-4333-8444-555555555555');
+  const res = await relay(env, msg('plsi_withdrawal', { request: 'delete_all', contributor_id: 'a'.repeat(64), proof: 'b'.repeat(64) }), installToken());
+  assert.equal(res.status, 202);
+  const { ticket } = await res.json();
+  assert.equal(env.RELAY_KV.data.get(`deleting:${ticket}`).value, INSTALL_ID);
+
+  const read = (token) => call(env, 'POST', '/ack', { body: { ticket }, token });
+  assert.deepEqual(await (await read(installToken())).json(), { ok: true, status: 'pending' });
+  const deleted = { ok: true, receipt: 'r_00000000000000bb', kind: 'plsi_withdrawal', status: 'deleted', packages_deleted: 1 };
+  assert.equal((await call(env, 'POST', '/admin/ack', { body: { ref: ticket, ack: deleted }, token: INTAKE })).status, 200);
+
+  assert.equal((await read(other)).status, 200);  // another install reading the ticket retires nobody
+  assert.equal(await env.RELAY_KV.get(`revoked:${INSTALL_ID}`), null);
+
+  assert.deepEqual(await (await read(installToken())).json(), { ok: true, status: 'done', ack: deleted });
+  assert.equal(await env.RELAY_KV.get(`revoked:${INSTALL_ID}`), '1');
+  assert.equal(await env.RELAY_KV.get(`deleting:${ticket}`), null);
+  assert.equal((await relay(env, msg('plsi_contribution'), installToken())).status, 401);
+});
+
+test('a stop, or a refused deletion, retires nobody', async () => {
+  const env = fakeEnv();
+  const stop = await relay(env, msg('plsi_withdrawal', { request: 'stop', contributor_id: 'a'.repeat(64) }), installToken());
+  assert.equal(env.RELAY_KV.data.has(`deleting:${(await stop.json()).ticket}`), false);
+  const del = await relay(env, msg('plsi_withdrawal', { request: 'delete_all', contributor_id: 'a'.repeat(64), proof: 'b'.repeat(64) }), installToken());
+  const { ticket } = await del.json();
+  await call(env, 'POST', '/admin/ack', { body: { ref: ticket, ack: { ok: false, error: 'BAD_PROOF' } }, token: INTAKE });
+  await call(env, 'POST', '/ack', { body: { ticket }, token: installToken() });
+  assert.equal(await env.RELAY_KV.get(`revoked:${INSTALL_ID}`), null);
+});

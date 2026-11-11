@@ -20,13 +20,21 @@ FLAGS = {
 }
 
 
+def external(text: str) -> dict[str, str]:
+    """Text from outside, as the CLI hands it on: data, never instructions."""
+    return {"kind": "external_text", "text": text}
+
+
 def warnings(doc: dict[str, Any]) -> list[dict[str, str]]:
-    """`{path, flag}` once per place; a report by line."""
+    """`{path, flag}` once per place; a report by line. Matched like the gate, on gate.clean(text)."""
     out = []
-    for path, plain, text, is_key, _ in gate._strings(doc):
+    for path, plain, text, is_key, _ in gate.strings(doc):
         if is_key:
             continue
+        text = gate.clean(text)
         for flag, pattern in FLAGS.items():
-            at = [f"report[{n}]" for n in note.lines(pattern, text)] if plain == "report" else [path][:bool(pattern.search(text))]
-            out += [{"path": p, "flag": flag} for p in at]
+            if plain == "report":
+                out += [{"path": f"report[{n}]", "flag": flag} for n in note.lines(pattern, text)]
+            elif pattern.search(text):
+                out.append({"path": path, "flag": flag})
     return out

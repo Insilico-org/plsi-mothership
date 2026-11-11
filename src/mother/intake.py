@@ -1,31 +1,24 @@
-"""`mother intake`: one relayed message, re-checked by the gate and stored per WIRE §6 with a receipt
-`r_<16 hex>`. Contributions go to intake/<contributor_id>/, withdrawals stop or delete everything of the contributor
-(delete_all only with the proof; the deletion receipt is written first). A contribution for a pseudonym that already
-has a deletion receipt is refused (`ALREADY_DELETED`) and stored nowhere. Registry updates wait in notes/ for
-review, preregistrations and findings enter the ledger. A research note never comes through the relay: the gate
-refuses it here (it arrives by email, `mother research intake`). A refused message stores nothing.
-
-The webhook carries only a `relay_ref` (Grok Bot wakes show only ~4 KiB of a body): the body and its sender (and a
-professional's pid and role) are taken from the relay with the intake key, so nothing on the webhook is trusted, and the
-outcome goes back to the relay as the sender's ACK, `INTERNAL` on any unexpected error. What is stored is the gated
-document re-serialised canonically, never the sender's raw text."""
+"""`mother intake`: one relayed message, re-checked by the gate and stored canonically (WIRE §6) under a new receipt;
+a refused message stores nothing. Contributions go to intake/<contributor_id>/ (`ALREADY_DELETED` once a deletion
+receipt covers the pseudonym), withdrawals stop or delete everything of the contributor (the deletion receipt first),
+registry updates wait in notes/, preregistrations and findings enter the ledger; research notes come only by email.
+The webhook carries only a `relay_ref`: the body and its sender are taken from the relay with the intake key, and the
+outcome goes back as the sender's ACK (`INTERNAL` on any unexpected error)."""
 
 from __future__ import annotations
 
-import hashlib
 import hmac
-import secrets
 import time
 from typing import Any
 
-from mother import audit, clock, gate, index, ledger, net, release
+from mother import audit, clock, findings, gate, index, ledger, net, notes, release
 from mother.errors import EnvironmentProblem, GateFailed, MotherError, NetworkError, Refused, violation
-from mother.store import Store, read_json, write_json
+from mother.store import Store, new_receipt, read_json, sha256_hex, write_json
 from mother.vocab import ContributorStatus, Entry, FindingStatus, Kind, NoteStatus, Request, Sender
-
 
 REF_KEYS = {"kind", "schema_version", "ref", "sha256", "bytes"}
 REF_RETRY_S = 65  # a KV write can take up to ~60 s to show at another Cloudflare location
+DELETIONS = "deletions"  # one delete_all receipt per file
 
 
 def _ref(text: str) -> dict[str, Any]:
@@ -55,43 +48,25 @@ def _take(ref: dict[str, Any]) -> dict[str, Any]:
                       code="REF_NOT_FOUND", hint="tell the stewards which relay you asked when no wake was taken before")
     body = parked.get("body")
     raw = body.encode("utf-8") if isinstance(body, str) else b""
-    if len(raw) != ref["bytes"] or not hmac.compare_digest(hashlib.sha256(raw).hexdigest(), ref["sha256"]):
+    if len(raw) != ref["bytes"] or not hmac.compare_digest(sha256_hex(raw), ref["sha256"]):
         raise Refused("the body the relay returned does not match the relay_ref", code="REF_MISMATCH")
     return parked
 
 
-def receipt() -> str:
-    return f"r_{secrets.token_hex(8)}"
-
-
-def _pseudonym_hash(contributor_id: str) -> str:
-    return hashlib.sha256(contributor_id.encode("ascii")).hexdigest()
-
-
 def _deleted_pseudonym(store: Store, contributor_id: str) -> bool:
-    """True when a delete_all receipt already covers this pseudonym.
-
-    Receipts store sha256(contributor_id), not the pseudonym. A match means a later contribution must not be
-    stored: the withdrawal may have run before this package arrived, and the client may already have dropped
-    the only proof that could delete it.
-    """
-    digest = _pseudonym_hash(contributor_id)
-    for path in store.list("deletions"):
-        if not path.endswith(".json"):
-            continue
-        got = read_json(store, path).get("contributor_id_sha256")
-        if isinstance(got, str) and len(got) == len(digest) and hmac.compare_digest(got, digest):
-            return True
-    return False
+    """True when a deletion receipt (which holds sha256(contributor_id), never the pseudonym) covers this pseudonym:
+    the client may already have dropped the only proof that could delete a later package."""
+    digest = sha256_hex(contributor_id)
+    return any(hmac.compare_digest(str(read_json(store, p).get("contributor_id_sha256")), digest)
+               for p in store.list(DELETIONS) if p.endswith(".json"))
 
 
 def _contribution(store: Store, doc: dict[str, Any], text: str, rid: str) -> dict[str, Any]:
     if _deleted_pseudonym(store, doc["contributor_id"]):
-        raise Refused(
-            "a delete_all receipt already covers this contributor; the package is not stored",
-            code="ALREADY_DELETED",
-            hint="leave --delete only after the contribution is stored; a re-join cannot delete the old pseudonym")
-    store.write(f"intake/{doc['contributor_id']}/{rid}.json", text)
+        raise Refused("a delete_all receipt already covers this contributor; the package is not stored",
+                      code="ALREADY_DELETED",
+                      hint="leave --delete only after the contribution is stored; a re-join cannot delete the old pseudonym")
+    store.write(index.package_path(doc["contributor_id"], rid), text)
     entry = index.add_contribution(store, doc, rid)
     return {"status": entry["status"], "packages": len(entry["receipts"])}
 
@@ -105,8 +80,8 @@ def _withdrawal(store: Store, doc: dict[str, Any], rid: str) -> dict[str, Any]:
         return {"status": ContributorStatus.WITHDRAWN.value}
     packages = [p for p in store.list(f"intake/{cid}") if p.endswith(".json")]
     # Tombstone before the files go, so a contribution intake that starts after this one still sees the delete.
-    write_json(store, f"deletions/{rid}.json", {
-        "receipt": rid, "at": clock.stamp(), "contributor_id_sha256": _pseudonym_hash(cid),
+    write_json(store, f"{DELETIONS}/{rid}.json", {
+        "receipt": rid, "at": clock.stamp(), "contributor_id_sha256": sha256_hex(cid),
         "packages_deleted": len(packages)})
     gone = store.delete(f"intake/{cid}")
     if idx.pop(cid, None) is not None:
@@ -142,7 +117,7 @@ def _professional(store: Store, doc: dict[str, Any], text: str, rid: str, role: 
         if any(f["preregistration_id"] == doc["preregistration_id"] for f in ledger.entries(store, Entry.FINDING)):
             raise Refused("the preregistration already has a finding", code="DUPLICATE_ID")
         extra = {"preregistration_id": doc["preregistration_id"]}
-    store.write(f"findings/{id_}/{name}.json", text)
+    store.write(findings.path(id_, name), text)
     ledger.append(store, Entry(name), id_, **common, **extra)
     status = FindingStatus.PREREGISTERED if kind == Kind.PREREGISTRATION else FindingStatus.SUBMITTED
     return {"id": id_, "status": status.value}
@@ -180,16 +155,14 @@ def intake(store: Store, text: str) -> dict[str, Any]:
 def admit(store: Store, text: str, sender: str = Sender.CONTRIBUTOR, professional_id: str | None = None,
           role: str | None = None) -> dict[str, Any]:
     """Gate, store and index one message body (`text`, exactly as the sender sent it) from `sender`."""
-    doc = gate.parse(text)
-    if found := gate.violations(doc, sender, professional_id):
-        raise GateFailed(found)
-    kind, rid, text = Kind(doc["kind"]), receipt(), gate.canonical(doc)
+    doc = gate.checked(text, sender, professional_id)
+    kind, rid, text = Kind(doc["kind"]), new_receipt(), gate.canonical(doc)
     if kind == Kind.CONTRIBUTION:
         data = _contribution(store, doc, text, rid)
     elif kind == Kind.WITHDRAWAL:
         data = _withdrawal(store, doc, rid)
     elif kind == Kind.REGISTRY_UPDATE:
-        store.write(f"notes/{rid}.json", text)
+        store.write(notes.path(rid), text)
         data = {"status": NoteStatus.PENDING_REVIEW.value}
     else:
         data = _professional(store, doc, text, rid, role)

@@ -1,40 +1,40 @@
-// The Mother's ACK for a sender's ticket (§4): POST /ack reads it with any valid token; POST /admin/ack (INTAKE_KEY)
-// writes it and POST /admin/body hands the Mother a parked body and its sender once. Keys are the ref only, never the token.
+// The Mother's ACK under a sender's ticket (WIRE §4): /ack reads it; /admin/ack writes it; /admin/body takes a body.
 
-import { FORM_MAX, fail, json, limited, readJson } from './http.js';
-import { HOUR, limiter, tokenKey } from './limits.js';
-import { UUID, authenticate } from './tokens.js';
-
-const ACK_TTL = 7 * 86400;
-const ACK_MAX = 4 * 1024;
-const ACK_READS = 60; // per token per hour
+import { LIMITS, MAX, TTL } from './config.js';
+import { fail, json, limited } from './http.js';
+import { form, hit, tokenKey } from './limits.js';
+import { enc } from './sign.js';
+import { authenticate, isUuid, revoke } from './tokens.js';
 
 export async function ack(request, env) {
   const who = await authenticate(request, env);
   if (who instanceof Response) return who;
-  const rl = await limiter(env, `ack:${await tokenKey(env, who)}`, ACK_READS, HOUR);
-  if (!rl.ok) return limited(rl.retryAfter);
-  if (!(await rl.hit())) return limited();
-  const read = await readJson(request, FORM_MAX);
+  const read = await form(request, env, `ack:${await tokenKey(env, who)}`, LIMITS.ack);
   if (read instanceof Response) return read;
-  const ticket = read.body.ticket;
-  if (typeof ticket !== 'string' || !UUID.test(ticket)) return fail('bad_ticket', 400);
+  if (!(await hit(env, read.rl))) return limited();
+  const { ticket } = read.body;
+  if (!isUuid(ticket)) return fail('bad_ticket', 400);
   const value = await env.RELAY_KV.get(`ack:${ticket}`);
   if (value === null) return json({ ok: true, status: 'pending' });
-  return json({ ok: true, status: 'done', ack: JSON.parse(value) });
+  const theAck = JSON.parse(value);
+  // The install that asked for a deletion is retired once it reads the confirmation, so a stray token copy cannot send.
+  if (theAck.ok && theAck.status === 'deleted' && (await env.RELAY_KV.get(`deleting:${ticket}`)) === who.id) {
+    await revoke(env, who.id);
+    await env.RELAY_KV.delete(`deleting:${ticket}`);
+  }
+  return json({ ok: true, status: 'done', ack: theAck });
 }
 
+// POST /admin/ack {ref, ack} and POST /admin/body {ref}; admin.js has checked the ref.
 export async function postAck(env, body) {
-  if (typeof body.ref !== 'string' || !UUID.test(body.ref)) return fail('bad_ref', 400);
   if (!body.ack || typeof body.ack !== 'object' || Array.isArray(body.ack)) return fail('bad_ack', 400);
   const value = JSON.stringify(body.ack);
-  if (new TextEncoder().encode(value).byteLength > ACK_MAX) return fail('ack_too_large', 413);
-  await env.RELAY_KV.put(`ack:${body.ref}`, value, { expirationTtl: ACK_TTL });
+  if (enc.encode(value).byteLength > MAX.ack) return fail('ack_too_large', 413);
+  await env.RELAY_KV.put(`ack:${body.ref}`, value, { expirationTtl: TTL.ack });
   return json({ ok: true });
 }
 
 export async function takeBody(env, body) {
-  if (typeof body.ref !== 'string' || !UUID.test(body.ref)) return fail('bad_ref', 400);
   const key = `body:${body.ref}`;
   const value = await env.RELAY_KV.get(key);
   if (value === null) return fail('ref_not_found', 404);

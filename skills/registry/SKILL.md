@@ -22,4 +22,4 @@ arrive by email and are skill `research`.
    mother notes decide --receipt <r> --decision accepted|rejected --by "<steward>" --reason-file <that file>
    ```
 
-Accepted updates are ready for a later public registry; publishing them is not part of the wire contract yet.
+Accepted updates stay in the store; no wire route publishes them.

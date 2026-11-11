@@ -20,22 +20,14 @@ Follow persona.md. A withdrawal already in hand comes before notes and findings,
   may), so the packages went to the drive's trash, which Drive empties after 30 days. The contributor's ACK says so.
   Tell the stewards at once, in one message: a Manager of the shared drive should empty its trash now and make the
   `mother` service account a Manager, so later deletions are final. Never call such a deletion complete.
-- A later `plsi_contribution` for a pseudonym that already has a deletion receipt is refused (`ALREADY_DELETED`) and
-  stored nowhere. `stop` does not write that receipt; a contribution after `stop` means they re-joined.
 
 ## Out-of-order wakes
 
-"Deletion first" means a withdrawal you already have is handled the same day, ahead of notes and findings. It does not
-pull a contribution forward that has not arrived. There is no wake queue to reorder.
-
-If `delete_all` runs before the contribution is stored, `packages_deleted` can be 0. The client must already have
-waited for that contribution's ACK, and must not drop the secret until this reply has `status: deleted`. A late
-contribution for the same pseudonym is then `ALREADY_DELETED` and is not stored.
-
-A folder `intake/<contributor_id>/` that remains even though `sha256(contributor_id)` equals some deletion receipt's
-`contributor_id_sha256` is an orphan (overlapping wakes, or a package stored before the refusal existed). Tell a
-steward. They remove that folder and any index entry, which finishes the delete the receipt already proved. You
-cannot do it from an email or a name, and a re-join cannot prove it.
+There is no wake queue: "deletion first" never pulls forward a contribution that has not arrived. A `delete_all` that
+runs first can report `packages_deleted: 0`; the late contribution is then refused `ALREADY_DELETED` and stored
+nowhere (`stop` writes no receipt: a contribution after it is a re-join). A folder `intake/<contributor_id>/` whose
+`sha256(contributor_id)` matches a deletion receipt's `contributor_id_sha256` is an orphan: tell a steward, who removes
+it and any index entry to finish the delete the receipt proved. An email, a name or a re-join cannot prove it.
 
 ## Steps
 

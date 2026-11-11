@@ -1,8 +1,8 @@
-// Rate limits (§8): fixed windows in KV, keyed by HMACs, never a raw IP or token id.
+// Rate limits: fixed one-hour windows in KV, keyed by HMACs, never a raw IP or token id.
 
+import { HOUR, MAX } from './config.js';
+import { limited, readJson } from './http.js';
 import { hmac, now } from './sign.js';
-
-export const HOUR = 3600;
 
 // IPv6 addresses count per /64 (one subscriber's whole prefix), IPv4 per address.
 export function ipBucket(ip) {
@@ -23,29 +23,34 @@ export async function ipKey(request, env) {
 
 export const tokenKey = (env, who) => hmac(env.TOKEN_HMAC_SECRET, `rl:${who.id}`);
 
-// A fixed-window counter `rl:<key>` = {count, start}: {ok} says whether one more is allowed, retryAfter is the whole
-// seconds (at least 1) until the window ends, hit() counts it (false when the KV write fails). The record expires at the window's end, so a hit never extends the window. Callers check
-// first and hit only once a request has passed its cheap checks (Turnstile, kind), so rejected requests cost no write.
-// Best-effort: KV is not atomic and eventually consistent, so concurrent hits can be lost and quotas are soft.
-export async function limiter(env, key, limit, windowSec) {
+// The window `rl:<key>` = {count, start} as {key, count, start, ok, retryAfter}; reading it costs no write.
+export async function limiter(env, key, limit) {
   const full = `rl:${key}`;
   const t = now();
   let cur = null;
   try { cur = JSON.parse(await env.RELAY_KV.get(full)); } catch { /* unreadable: a fresh window */ }
-  const live = cur && Number.isInteger(cur.count) && Number.isInteger(cur.start) && cur.start <= t && t - cur.start < windowSec;
+  const live = cur && Number.isInteger(cur.count) && Number.isInteger(cur.start) && cur.start <= t && t - cur.start < HOUR;
   const count = live ? cur.count : 0;
   const start = live ? cur.start : t;
-  return {
-    ok: count < limit,
-    retryAfter: Math.max(1, start + windowSec - t),
-    async hit() {
-      try {
-        await env.RELAY_KV.put(full, JSON.stringify({ count: count + 1, start }),
-          { expiration: Math.max(start + windowSec, now() + 60) }); // KV wants expiration at least 60 s ahead
-        return true;
-      } catch {
-        return false;
-      }
-    },
-  };
+  return { key: full, count, start, ok: count < limit, retryAfter: Math.max(1, start + HOUR - t) };
+}
+
+// Counts one request (false when the KV write fails). Callers hit only once the cheap checks pass (Turnstile, kind),
+// so a rejected request costs no KV write.
+export async function hit(env, rl) {
+  try {
+    await env.RELAY_KV.put(rl.key, JSON.stringify({ count: rl.count + 1, start: rl.start }),
+      { expiration: Math.max(rl.start + HOUR, now() + 60) }); // KV wants expiration at least 60 s ahead
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// The shared start of a form route: its limit is checked, then a small JSON body read: {rl, body} or an error Response.
+export async function form(request, env, key, limit) {
+  const rl = await limiter(env, key, limit);
+  if (!rl.ok) return limited(rl.retryAfter);
+  const read = await readJson(request, MAX.form);
+  return read instanceof Response ? read : { rl, body: read.body };
 }

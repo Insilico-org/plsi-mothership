@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import hashlib
 import re
 from pathlib import Path
 from typing import Any
 
-from mother import audit, filecheck, gate, research
+from mother import audit, filecheck, flags, gate, research
 from mother.errors import NotFound, Refused, UsageError
-from mother.store import Store
+from mother.store import Store, sha256_hex
 
 DRIVE_ID = re.compile(r"/d/([A-Za-z0-9_-]{20,})|[?&]id=([A-Za-z0-9_-]{20,})|^([A-Za-z0-9_-]{20,})$")
 
@@ -32,7 +31,7 @@ def fetch(store: Store, link: str, check_only: bool, out: str | None) -> dict[st
 def fetch_note(store: Store, rid: str, name: str, keep: bool = False) -> dict[str, Any]:
     """A note's Drive file, read only when its bytes match the note's sha256 and pass the checks; stored only with
     `keep` (a steward's choice), then moved with the note when it is accepted."""
-    folder = research._dir(store, rid)
+    folder = research.folder(store, rid)
     entry = next((e for e in gate.parse(store.read(f"{folder}/note.json")).get("files") or []
                   if e["name"] == name and "drive_id" in e), None)
     if entry is None:
@@ -41,7 +40,7 @@ def fetch_note(store: Store, rid: str, name: str, keep: bool = False) -> dict[st
     if info["sha256"] != entry["sha256"]:
         raise Refused("the Drive file is not the one the note names", code="HASH_MISMATCH")
     _, data = _drive(store, entry["drive_id"], False)
-    if hashlib.sha256(data).hexdigest() != entry["sha256"]:  # the file may change between the two reads
+    if sha256_hex(data) != entry["sha256"]:  # the file may change between the two reads
         raise Refused("the Drive file is not the one the note names", code="HASH_MISMATCH")
     result = filecheck.check(name, data)
     if result["violations"] or result["data"] != data:
@@ -50,7 +49,7 @@ def fetch_note(store: Store, rid: str, name: str, keep: bool = False) -> dict[st
         store.write(f"{folder}/files/{name}", data.decode("utf-8"))
         audit.record(store, "research_keep", rid)
     return {"name": name, "violations": [], "kept": keep,
-            "content": {"kind": "external_text", "text": data.decode("utf-8")}}
+            "content": flags.external(data.decode("utf-8"))}
 
 
 def _drive(store: Store, file_id: str, check_only: bool) -> tuple[dict[str, Any], bytes | None]:
@@ -78,6 +77,6 @@ def _drive(store: Store, file_id: str, check_only: bool) -> tuple[dict[str, Any]
         data = store.shared_bytes(file_id)
     except Exception as exc:  # noqa: BLE001
         raise Refused("Google refused the download (possibly flagged as malware)", code="DOWNLOAD_REFUSED") from exc
-    if info["sha256"] and hashlib.sha256(data).hexdigest() != info["sha256"]:
+    if info["sha256"] and sha256_hex(data) != info["sha256"]:
         raise Refused("the bytes do not match Drive's sha256", code="HASH_MISMATCH")
     return info, data

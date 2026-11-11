@@ -1,11 +1,17 @@
-"""Mother storage (WIRE §6) behind one interface: read / write / append / list / delete on `/`-separated paths.
+"""Mother storage (WIRE §6) behind one interface: read / write / append / list / delete on `/`-separated paths,
+and write_sheet for the stewards' dashboard.
 MOTHER_STORE selects the backend: `local:<dir>` (dev and tests) or `drive:<shared drive id>` (Insilico's Google
 Drive shared drive; service account file from MOTHER_DRIVE_CREDENTIALS). Nothing else reads the storage."""
 
 from __future__ import annotations
 
+import csv
+import hashlib
+import io
 import json
+import mimetypes
 import os
+import secrets
 import shutil
 from pathlib import Path
 from typing import Any, Protocol
@@ -13,6 +19,11 @@ from typing import Any, Protocol
 from mother.errors import EnvironmentProblem, NotFound, UsageError
 
 FOLDER = "application/vnd.google-apps.folder"
+SHEET = "application/vnd.google-apps.spreadsheet"
+WIDE = 60  # a column with longer text is set to WIDE_PX and wraps
+WIDE_PX = 420
+HEADER = "#e6f6e7"
+Tabs = dict[str, list[list[Any]]]
 
 
 class Store(Protocol):
@@ -22,6 +33,7 @@ class Store(Protocol):
     def list(self, prefix: str) -> list[str]: ...
     def delete(self, path: str) -> bool: ...  # False: some of it only went to the backend's trash
     def exists(self, path: str) -> bool: ...
+    def write_sheet(self, title: str, tabs: Tabs, colors: dict[str, str]) -> str: ...  # where the stewards open it
 
 
 def _parts(path: str) -> list[str]:
@@ -32,8 +44,6 @@ def _parts(path: str) -> list[str]:
 
 
 class LocalStore:
-    """A directory on disk."""
-
     def __init__(self, root: str | Path) -> None:
         self.root = Path(root)
 
@@ -76,6 +86,40 @@ class LocalStore:
     def exists(self, path: str) -> bool:
         return self._path(path).exists()
 
+    def write_sheet(self, title: str, tabs: Tabs, colors: dict[str, str]) -> str:
+        """One CSV per tab under <title>/, old tabs removed (colors are for a real sheet only)."""
+        self.delete(title)
+        for tab, rows in tabs.items():
+            buf = io.StringIO()
+            csv.writer(buf, lineterminator="\n").writerows(rows)
+            self.write(f"{title}/{tab}.csv", buf.getvalue())
+        return str(self._path(title))
+
+
+def _rgb(hex_color: str) -> dict[str, float]:
+    return {k: int(hex_color[i:i + 2], 16) / 255 for k, i in (("red", 1), ("green", 3), ("blue", 5))}
+
+
+def _tab_format(sheet_id: int, rows: list[list[Any]]) -> list[dict[str, Any]]:
+    """Bold shaded header row, frozen; columns sized to their text, long text wrapped at a reading width."""
+    width = max((len(r) for r in rows), default=1)
+    out: list[dict[str, Any]] = [
+        {"updateSheetProperties": {"properties": {"sheetId": sheet_id, "gridProperties": {"frozenRowCount": 1}},
+                                   "fields": "gridProperties.frozenRowCount"}},
+        {"repeatCell": {"range": {"sheetId": sheet_id, "startRowIndex": 0, "endRowIndex": 1},
+                        "cell": {"userEnteredFormat": {"textFormat": {"bold": True}, "backgroundColor": _rgb(HEADER)}},
+                        "fields": "userEnteredFormat(textFormat,backgroundColor)"}},
+        {"autoResizeDimensions": {"dimensions": {"sheetId": sheet_id, "dimension": "COLUMNS", "startIndex": 0,
+                                                 "endIndex": width}}}]
+    for col in range(width):
+        if max((len(str(r[col])) for r in rows if col < len(r)), default=0) > WIDE:
+            span = {"sheetId": sheet_id, "dimension": "COLUMNS", "startIndex": col, "endIndex": col + 1}
+            out += [{"updateDimensionProperties": {"range": span, "properties": {"pixelSize": WIDE_PX}, "fields": "pixelSize"}},
+                    {"repeatCell": {"range": {"sheetId": sheet_id, "startColumnIndex": col, "endColumnIndex": col + 1},
+                                    "cell": {"userEnteredFormat": {"wrapStrategy": "WRAP"}},
+                                    "fields": "userEnteredFormat.wrapStrategy"}}]
+    return out
+
 
 class DriveStore:
     """A Google shared drive: path segments are folders, the last one a file. Appends rewrite the file (Drive has no
@@ -92,6 +136,7 @@ class DriveStore:
         creds = service_account.Credentials.from_service_account_file(
             credentials, scopes=["https://www.googleapis.com/auth/drive"])
         self.files = build("drive", "v3", credentials=creds, cache_discovery=False).files()
+        self.sheets = build("sheets", "v4", credentials=creds, cache_discovery=False).spreadsheets()
         self.drive = drive_id
         self.common = {"supportsAllDrives": True}
 
@@ -115,18 +160,19 @@ class DriveStore:
             items = [c for i in items if i["mimeType"] == FOLDER for c in self._children(i["id"], name)]
         return items
 
-    def _find(self, parts: list[str], create: bool = False) -> dict[str, str] | None:
+    def _folder(self, parts: list[str]) -> dict[str, str]:
+        """The first folder at `parts`, made where missing."""
         item = {"id": self.drive, "mimeType": FOLDER}
         for name in parts:
             found = self._children(item["id"], name)
-            if found:
-                item = found[0]
-            elif create:
-                item = self.files.create(body={"name": name, "mimeType": FOLDER, "parents": [item["id"]]},
-                                         fields="id, mimeType", **self.common).execute()
-            else:
-                return None
+            item = found[0] if found else self.files.create(
+                body={"name": name, "mimeType": FOLDER, "parents": [item["id"]]}, fields="id, mimeType",
+                **self.common).execute()
         return item
+
+    def _tabs(self, sid: str) -> dict[str, dict[str, Any]]:
+        fields = "sheets(properties(sheetId,title),conditionalFormats)"
+        return {t["properties"]["title"]: t for t in self.sheets.get(spreadsheetId=sid, fields=fields).execute()["sheets"]}
 
     def shared(self, file_id: str) -> dict[str, Any]:
         """Metadata of a file someone shared with the service account; nothing is downloaded."""
@@ -141,14 +187,14 @@ class DriveStore:
         item = next((i for i in self._all(_parts(path)) if i["mimeType"] != FOLDER), None)
         if item is None:
             raise NotFound("not in the store")
-        return self.files.get_media(fileId=item["id"], **self.common).execute().decode("utf-8")
+        return self.shared_bytes(item["id"]).decode("utf-8")
 
     def write(self, path: str, text: str) -> None:
         from googleapiclient.http import MediaInMemoryUpload
 
         *folders, name = _parts(path)
-        parent = self._find(folders, create=True)
-        media = MediaInMemoryUpload(text.encode("utf-8"), mimetype="application/json")
+        parent = self._folder(folders)
+        media = MediaInMemoryUpload(text.encode("utf-8"), mimetype=mimetypes.guess_type(name)[0] or "text/plain")
         if existing := self._children(parent["id"], name):
             self.files.update(fileId=existing[0]["id"], media_body=media, **self.common).execute()
         else:
@@ -192,9 +238,33 @@ class DriveStore:
     def exists(self, path: str) -> bool:
         return bool(self._all(_parts(path)))
 
+    def write_sheet(self, title: str, tabs: Tabs, colors: dict[str, str]) -> str:
+        """The Google Sheet `title` at the top of the drive, made once and rewritten tab by tab. Values go in RAW,
+        so text starting with "=" stays text and never runs as a formula; `colors` shades cells by exact text."""
+        found = [c for c in self._children(self.drive, title) if c["mimeType"] == SHEET]
+        sid = found[0]["id"] if found else self.files.create(
+            body={"name": title, "mimeType": SHEET, "parents": [self.drive]}, fields="id", **self.common).execute()["id"]
+        have = self._tabs(sid)
+        if adds := [{"addSheet": {"properties": {"title": t}}} for t in tabs if t not in have]:
+            self.sheets.batchUpdate(spreadsheetId=sid, body={"requests": adds}).execute()
+            have = self._tabs(sid)
+        requests = [{"deleteSheet": {"sheetId": v["properties"]["sheetId"]}} for t, v in have.items() if t not in tabs]
+        for tab, rows in tabs.items():
+            sheet_id = have[tab]["properties"]["sheetId"]
+            self.sheets.values().clear(spreadsheetId=sid, range=f"'{tab}'").execute()
+            requests += _tab_format(sheet_id, rows)
+            if not have[tab].get("conditionalFormats"):  # once: rebuilds never stack duplicate rules
+                requests += [{"addConditionalFormatRule": {"index": 0, "rule": {
+                    "ranges": [{"sheetId": sheet_id}],
+                    "booleanRule": {"condition": {"type": "TEXT_EQ", "values": [{"userEnteredValue": text}]},
+                                    "format": {"backgroundColor": _rgb(color)}}}}} for text, color in colors.items()]
+        self.sheets.values().batchUpdate(spreadsheetId=sid, body={"valueInputOption": "RAW", "data": [
+            {"range": f"'{tab}'!A1", "values": rows} for tab, rows in tabs.items()]}).execute()
+        self.sheets.batchUpdate(spreadsheetId=sid, body={"requests": requests}).execute()
+        return f"https://docs.google.com/spreadsheets/d/{sid}"
+
 
 def open_store() -> Store:
-    """The store named by MOTHER_STORE."""
     backend, _, where = os.environ.get("MOTHER_STORE", "").partition(":")
     if backend == "local" and where:
         return LocalStore(where)
@@ -208,10 +278,23 @@ def open_store() -> Store:
                              code="STORE_NOT_CONFIGURED")
 
 
+def new_receipt() -> str:
+    """A receipt `r_<16 hex>`: the name of everything one command stores."""
+    return f"r_{secrets.token_hex(8)}"
+
+
+def sha256_hex(data: str | bytes) -> str:
+    return hashlib.sha256(data.encode("utf-8") if isinstance(data, str) else data).hexdigest()
+
+
 def read_json(store: Store, path: str, default: Any = None) -> Any:
-    if default is not None and not store.exists(path):
+    """The document at `path`; `default` when it is missing and a default is given, else NotFound."""
+    try:
+        return json.loads(store.read(path))
+    except NotFound:
+        if default is None:
+            raise
         return default
-    return json.loads(store.read(path))
 
 
 def write_json(store: Store, path: str, doc: Any) -> None:
@@ -223,6 +306,8 @@ def append_jsonl(store: Store, path: str, doc: dict[str, Any]) -> None:
 
 
 def read_jsonl(store: Store, path: str) -> list[dict[str, Any]]:
-    if not store.exists(path):
+    try:
+        text = store.read(path)
+    except NotFound:
         return []
-    return [json.loads(line) for line in store.read(path).splitlines() if line.strip()]
+    return [json.loads(line) for line in text.splitlines() if line.strip()]

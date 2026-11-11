@@ -1,5 +1,4 @@
-// Fake Pages env and upstreams for the relay tests: in-memory KV, static assets from public/, string secrets, stubbed fetch.
-// RELAY_WORKER=upload runs the same tests against the `npm run upload` bundle.
+// Fake Pages env for the relay tests (RELAY_WORKER=upload: the bundle): in-memory KV, public/ assets, stubbed fetch.
 import { createHmac } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 
@@ -12,7 +11,7 @@ export const SENDER = 'test-sender-key';
 export const WEBHOOK = 'https://mother.test/intake';
 export const IP = '203.0.113.7';
 
-export function fakeKv() {
+function fakeKv() {
   const data = new Map();
   return {
     data,
@@ -28,7 +27,7 @@ export function fakeKv() {
 }
 
 // Serves public/<file>, and public/<path>.html like Pages pretty URLs, else 404.
-export function fakeAssets() {
+function fakeAssets() {
   return {
     async fetch(request) {
       const name = new URL(request.url).pathname.replace(/^\/+/, '') || 'index';
@@ -63,9 +62,7 @@ export function fakeEnv(extra = {}) {
 // relay.test), "bad" fails. The Mother answers mother.reply() (default 202 with a receipt).
 export const calls = [];
 export const mother = { reply: null };
-const receipt = () => new Response(JSON.stringify({ ok: true, receipt: 'r_0123456789abcdef' }), {
-  status: 202, headers: { 'content-type': 'application/json' },
-});
+const receipt = () => Response.json({ ok: true, receipt: 'r_0123456789abcdef' }, { status: 202 });
 globalThis.fetch = async (url, init = {}) => {
   calls.push({ url: String(url), init });
   if (String(url).includes('siteverify')) {

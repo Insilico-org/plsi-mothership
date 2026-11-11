@@ -13,14 +13,14 @@ from mother.errors import Refused, violation
 MAX_BYTES = 9_000_000
 MAX_ROWS = 5_000
 VEGA_LITE = "https://vega.github.io/schema/vega-lite/"
-TEXT = ("csv", "tsv", "md", "json")
 FORMULA = ("=", "+", "-", "@")
 
 
 def _kind(name: str, data: bytes) -> str:
     ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
-    if ext not in TEXT:
-        raise Refused("only csv, tsv, md and json files are taken: no images, video or audio", code="BAD_FILE_TYPE")
+    if ext not in note.FILE_TYPES:
+        names = f"{', '.join(note.FILE_TYPES[:-1])} and {note.FILE_TYPES[-1]}"
+        raise Refused(f"only {names} files are taken: no images, video or audio", code="BAD_FILE_TYPE")
     try:
         text = data.decode("utf-8")
     except UnicodeDecodeError:
@@ -30,17 +30,9 @@ def _kind(name: str, data: bytes) -> str:
     return ext
 
 
-def _keys(obj: Any) -> list[tuple[str, Any]]:
-    if isinstance(obj, dict):
-        return [p for k, v in obj.items() for p in ((k, v), *_keys(v))]
-    if isinstance(obj, list):
-        return [p for v in obj for p in _keys(v)]
-    return []
-
-
-def _chart(doc: dict[str, Any]) -> None:
-    """A Vega-Lite chart draws only the numbers it carries: no outside data, links or pictures."""
-    pairs = _keys(doc)
+def _chart(found: list[tuple[str, str, str, bool, Any]]) -> None:
+    """A Vega-Lite chart (its gate.strings) draws only the numbers it carries: no outside data, links or images."""
+    pairs = [(k, parent[k]) for _, _, k, is_key, parent in found if is_key]
     marks = [v.get("type") if isinstance(v, dict) else v for k, v in pairs if k == "mark"]
     rows = sum(len(v) for k, v in pairs if k == "values" and isinstance(v, list))
     if any(k in ("url", "href") for k, _ in pairs) or "image" in marks or rows > MAX_ROWS:
@@ -68,17 +60,13 @@ def _number(cell: str) -> bool:
 
 
 def _hits(text: str, numeric: bool = False) -> set[str]:
-    clean = note.CITATION.sub(" ", note.MASKS["url"].sub(" ", gate._clean(text)))  # a doi.org link is a citation
-    return {rule for rule, pattern in gate.PATTERNS.items() if not (numeric and rule == "id_number")
-            and pattern.search(gate.YEARS.sub(" ", clean) if rule == "id_number" else clean)}
-
-
-def _strings(obj: Any) -> list[str]:
-    if isinstance(obj, dict):
-        return [s for k, v in obj.items() for s in (str(k), *_strings(v))]
-    if isinstance(obj, list):
-        return [s for v in obj for s in _strings(v)]
-    return [obj] if isinstance(obj, str) else []
+    """The text rules `text` breaks once its masked forms are blanked; a number cell is no id number."""
+    clean = gate.clean(text)
+    for pattern in note.FILE_MASKS:
+        clean = pattern.sub(" ", clean)
+    ids = gate.YEARS.sub(" ", note.STATISTIC.sub(" ", clean))  # what id_number sees: no statistic, no year
+    rules = {rule for rule, pattern in gate.PATTERNS.items() if pattern.search(ids if rule == "id_number" else clean)}
+    return rules - {"id_number"} if numeric else rules
 
 
 def check(name: str, data: bytes) -> dict[str, Any]:
@@ -90,12 +78,13 @@ def check(name: str, data: bytes) -> dict[str, Any]:
     if kind == "json":
         try:
             doc = json.loads(text)
-        except ValueError:
+            found = gate.strings(doc)
+        except (ValueError, RecursionError):  # RecursionError: nested too deep
             raise Refused("invalid JSON", code="BAD_FILE") from None
         schema = doc.get("$schema") if isinstance(doc, dict) else None
         if isinstance(schema, str) and schema.startswith(VEGA_LITE):
-            _chart(doc)
-        rules = set().union(*(_hits(s) for s in _strings(doc) if s != schema))
+            _chart(found)
+        rules = set().union(*(_hits(s) for _, _, s, _, _ in found if s != schema))
     elif kind in ("csv", "tsv"):
         delimiter = "," if kind == "csv" else "\t"
         rows = list(csv.reader(io.StringIO(text), delimiter=delimiter))

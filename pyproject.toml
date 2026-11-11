@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "plsi-mother"
-version = "0.2.0"
-description = "The Longevity Mothership toolbelt: intake, deletion, releases, catalog and the findings ledger."
+dynamic = ["version"]
+description = "The Longevity Mothership toolbelt: relay intake, research notes, feedback, releases, catalog and findings."
 requires-python = ">=3.11"
 dependencies = []
 
@@ -14,6 +14,9 @@ drive = ["google-api-python-client", "google-auth"]
 
 [project.scripts]
 mother = "mother.cli:main"
+
+[tool.setuptools.dynamic]
+version = {attr = "mother.__version__"}
 
 [tool.setuptools.packages.find]
 where = ["src"]

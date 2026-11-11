@@ -1,52 +1,39 @@
-// POST /admin/* (§6). INTAKE_KEY, held by the Mother's bot for `mother intake`, opens only /admin/body and /admin/ack;
-// ADMIN_KEY, held by stewards only, opens invites, invite status, revocation and publishing, and not body/ack. The two
-// keys must differ: if they are equal, every admin and intake route answers 503 admin_not_configured.
+// POST /admin/* (WIRE §4): INTAKE_KEY opens only the intake routes, ADMIN_KEY only the rest; equal keys close both.
 
 import { postAck, takeBody } from './ack.js';
-import { same } from './sign.js';
+import { MAX } from './config.js';
 import { bearer, fail, json, readJson } from './http.js';
 import { invite, inviteStatus } from './invites.js';
-import { PUBLISHED, VERSION } from './reads.js';
-import { UUID } from './tokens.js';
+import { publish } from './reads.js';
+import { same } from './sign.js';
+import { isUuid, revoke } from './tokens.js';
 
-const PUBLISH_MAX = 5 * 1024 * 1024;
-const INTAKE_MAX = 8 * 1024; // {ref} or {ref, ack} with the ACK at most 4 KiB
-const INTAKE = { '/admin/body': takeBody, '/admin/ack': postAck };
-
-async function publish(env, body) {
-  const { what, version } = body;
-  if (!body.body || typeof body.body !== 'object') return fail('bad_body', 400);
-  const value = JSON.stringify(body.body);
-  if (what === 'release') {
-    if (typeof version !== 'string' || !VERSION.test(version) || version === 'latest') return fail('bad_version', 400);
-    await env.RELAY_KV.put(`pub:release:${version}`, value);
-    await env.RELAY_KV.put('pub:release:latest', version);
-  } else if (Object.hasOwn(PUBLISHED, what)) {
-    await env.RELAY_KV.put(PUBLISHED[what], value);
-  } else {
-    return fail('bad_what', 400);
-  }
+async function revokeId(env, body) {
+  if (!isUuid(body.id)) return fail('bad_id', 400);
+  await revoke(env, body.id);
   return json({ ok: true });
 }
 
+// path -> {handler(env, body, request), intake: opened by INTAKE_KEY and carries a {ref}}.
+const ADMIN = {
+  '/admin/body': { handler: takeBody, intake: true },
+  '/admin/ack': { handler: postAck, intake: true },
+  '/admin/invite': { handler: invite },
+  '/admin/invite/status': { handler: inviteStatus },
+  '/admin/revoke': { handler: revokeId },
+  '/admin/publish': { handler: publish },
+};
+
 export async function admin(request, env, path) {
-  const intake = Object.hasOwn(INTAKE, path) ? INTAKE[path] : null;
+  const route = Object.hasOwn(ADMIN, path) ? ADMIN[path] : null;
+  const intake = Boolean(route && route.intake);
   const key = intake ? env.INTAKE_KEY : env.ADMIN_KEY;
   if (env.INTAKE_KEY && env.INTAKE_KEY === env.ADMIN_KEY) return fail('admin_not_configured', 503);
   if (!key || !env.TOKEN_HMAC_SECRET) return fail(intake ? 'intake_not_configured' : 'admin_not_configured', 503);
   if (!same(bearer(request), key)) return fail('unauthorized', 401);
-  const read = await readJson(request, intake ? INTAKE_MAX : PUBLISH_MAX);
+  const read = await readJson(request, intake ? MAX.intake : MAX.publish);
   if (read instanceof Response) return read;
-  const body = read.body;
-
-  if (intake) return intake(env, body);
-  if (path === '/admin/invite') return invite(request, env, body);
-  if (path === '/admin/invite/status') return inviteStatus(env, body);
-  if (path === '/admin/revoke') {
-    if (typeof body.id !== 'string' || !UUID.test(body.id)) return fail('bad_id', 400);
-    await env.RELAY_KV.put(`revoked:${body.id}`, '1');
-    return json({ ok: true });
-  }
-  if (path === '/admin/publish') return publish(env, body);
-  return fail('not_found', 404);
+  if (!route) return fail('not_found', 404);
+  if (intake && !isUuid(read.body.ref)) return fail('bad_ref', 400);
+  return route.handler(env, read.body, request);
 }
