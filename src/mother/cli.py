@@ -13,8 +13,8 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
-from mother import (audit, catalog, dashboard, feedback, fetch, findings, index, intake, notes, professional, publish,
-                    release, report, research)
+from mother import (audit, catalog, dashboard, feedback, fetch, findings, index, intake, notes, professional, projects,
+                    publish, release, report, research)
 from mother.errors import MotherError, UsageError
 from mother.store import Store, open_store
 from mother.vocab import Decision, Publication, Role, Verdict
@@ -103,6 +103,14 @@ COMMANDS: dict[str, tuple[Callable[[Store, argparse.Namespace], Any], str]] = { 
     "feedback digest": (lambda s, a: feedback.digest(s, a.since, a.save),
                         "summarize for the stewards without addresses, send it, then --save the text"),
     "publish": (lambda s, a: publish.publish(s, a.what, a.version), ""),
+    "project publish": (lambda s, a: projects.create_project(s, a.receipt),
+                        "the invite-only workspace is made; the team collaborates, then a steward runs mother project gazette"),
+    "project gazette": (lambda s, a: projects.go_gazette(s, a.id),
+                        "a steward runs mother publish gazette (and mother publish projects) to put it on the public gazette"),
+    "project invite": (lambda s, a: projects.intake(s, _bytes(a.eml)),
+                       "the named addresses are given or, on a revoke, lose Drive writer on the project folder"),
+    "project list": (lambda s, a: projects.listing(s), ""),
+    "project status": (lambda s, a: projects.status(s, a.id), ""),
     "professional invite": (lambda s, a: professional.invite(s, a.role, a.scopes.split(","), a.days, a.out),
                             "email the link in the file to the verified address only (skill verify), then delete the file"),
     "professional invites": (lambda s, a: professional.invites(s),
@@ -112,7 +120,7 @@ COMMANDS: dict[str, tuple[Callable[[Store, argparse.Namespace], Any], str]] = { 
 }
 CHANGES = frozenset({"intake", "notes decide", "research intake", "research review", "research decide",  # the dashboard
                      "research replied", "research tidy", "feedback intake", "findings review", "findings accept",
-                     "findings reject"})
+                     "findings reject", "project publish", "project gazette", "project invite"})
 assert CHANGES <= COMMANDS.keys(), "a dashboard command that is not a command"
 
 
@@ -183,6 +191,15 @@ def build_parser() -> argparse.ArgumentParser:
     p = rs.add_parser("digest")
     p.add_argument("--date", required=True, help="YYYY-MM-DD (UTC)")
     p.add_argument("--save", help="the digest text the Mother wrote, stored as research/digests/<date>.md")
+
+    pr = _group(sub, "project")
+    _add(pr.add_parser("publish", help="publish an accepted note's project into a stable shareable folder (WIRE §7)"), "receipt")
+    _add(pr.add_parser("gazette", help="approve a workspace project and take its publication/ subfolder to the public "
+                                       "gazette (WIRE §7)"), "id")
+    _add(pr.add_parser("invite", help="an owner's project-access email (invite or revoke): grant or remove the named "
+                                      "addresses' Drive writer"), "eml")
+    pr.add_parser("list", help="every published project (no addresses)")
+    _add(pr.add_parser("status"), "id")
 
     fb = _group(sub, "feedback")
     _add(fb.add_parser("intake", help="gate and store the feedback report of one email (WIRE §8)"), "eml")

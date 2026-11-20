@@ -15,7 +15,8 @@ from typing import Any
 
 from mother import contribution, note, stats
 from mother.errors import GateFailed, violation
-from mother.vocab import ContributionKind, Direction, FeedbackRole, FeedbackStage, Kind, Op, Request, Sender, Severity
+from mother.vocab import (ContributionKind, Direction, FeedbackRole, FeedbackStage, Kind, Op, ProjectAction, Request,
+                          Sender, Severity)
 
 SCHEMA_VERSION = 4
 MAX_DEPTH = 32
@@ -31,6 +32,7 @@ FIELDS = {  # kind -> (required, optional) body fields beyond kind and schema_ve
     Kind.FINDING: ({"professional_id", "finding_id", "preregistration_id", "release", "analysis", "result",
                     "summary"}, set()),
     Kind.FEEDBACK: ({"role", "stages", "frustrations", "suggestions"}, set()),
+    Kind.PROJECT_INVITE: ({"project_id", "emails"}, {"action"}),
 }
 ITEM_FIELDS = {
     Kind.RESEARCH_NOTE: {"claim", "grade", "evidence_class", "sources", "falsified_by", "next_step", *note.FIELDS},
@@ -40,7 +42,7 @@ ITEM_FIELDS = {
 SENDERS = {Kind.CONTRIBUTION: {Sender.CONTRIBUTOR}, Kind.WITHDRAWAL: {Sender.CONTRIBUTOR},
            Kind.REGISTRY_UPDATE: {Sender.CONTRIBUTOR}, Kind.RESEARCH_NOTE: {Sender.EMAIL},
            Kind.PREREGISTRATION: {Sender.PROFESSIONAL}, Kind.FINDING: {Sender.PROFESSIONAL},
-           Kind.FEEDBACK: {Sender.EMAIL}}
+           Kind.FEEDBACK: {Sender.EMAIL}, Kind.PROJECT_INVITE: {Sender.EMAIL}}
 FEEDBACK = {"stages": {"stage", "minutes", "measured"}, "frustrations": {"stage", "what", "severity"},
             "suggestions": {"stage", "what"}}
 MAX_FEEDBACK = 20  # entries per list
@@ -71,16 +73,19 @@ YEARS = re.compile(r"(?<!\d)(?:19|20)\d{2}(?!\d)")
 # exemptions by exact path (`[]` any index, `*` any coordinate key), per rule and kind; keys are never exempt. A
 # `code.code` is exempt only in a code object of a numbered system (contribution.NUMBERED), never a free or cpg code.
 EXEMPT = {
-    "exact_date": {Kind.RESEARCH_NOTE: note.ID_PATHS},
+    "exact_date": {Kind.RESEARCH_NOTE: note.ID_PATHS, Kind.PROJECT_INVITE: frozenset({"project_id"})},
     "id_number": {
         Kind.CONTRIBUTION: frozenset({"contributor_id", "states[].map_hash", "states[].coordinates.*.items[].code.code",
                                       "life_events[].code.code"}),
         Kind.WITHDRAWAL: frozenset({"contributor_id", "proof"}),
         Kind.RESEARCH_NOTE: note.ID_PATHS,
         Kind.PREREGISTRATION: frozenset({"professional_id", "preregistration_id", "release", "parents[]"}),
-        Kind.FINDING: frozenset({"professional_id", "finding_id", "preregistration_id", "release"})},
+        Kind.FINDING: frozenset({"professional_id", "finding_id", "preregistration_id", "release"}),
+        Kind.PROJECT_INVITE: frozenset({"project_id", "emails[]"})},
+    # a project-invite carries the collaborators' addresses on purpose: they are the point, not leaked identifiers
+    "email": {Kind.PROJECT_INVITE: frozenset({"emails[]"})},
     "url": {Kind.REGISTRY_UPDATE: frozenset({"items[].public_url", "items[].source_urls[]"}),
-            Kind.RESEARCH_NOTE: frozenset({"files[].name"})},
+            Kind.RESEARCH_NOTE: frozenset({"files[].name"}), Kind.PROJECT_INVITE: frozenset({"emails[]"})},
 }
 KEYED = frozenset({"states[].coordinates", "scores.by_coordinate"})  # objects keyed by coordinate ids
 IDS = {"preregistration_id": re.compile(r"pr_[0-9a-f]{16}"), "finding_id": re.compile(r"f_[0-9a-f]{16}"),
@@ -301,8 +306,27 @@ def _feedback(doc: dict[str, Any], kind: Kind, _: str | None) -> list[dict[str, 
     return out
 
 
+MAX_INVITE_EMAILS = 50
+INVITE_EMAIL = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")  # one bare address, checked by form; the owner-gate is in projects
+
+
+def _project_invite(doc: dict[str, Any], _: Kind, __: str | None) -> list[dict[str, str]]:
+    """plsi_project_invite: a project id (a lowercase uuid), 1-MAX addresses and an optional action (invite or revoke;
+    invite when absent) that decides whether the addresses are made collaborators or removed as ones."""
+    out = [] if contribution.fits(note.UUID, doc.get("project_id")) else [violation("project_id", "bad_project")]
+    if "action" in doc and doc["action"] not in tuple(ProjectAction):
+        out.append(violation("action", "bad_action"))
+    emails = doc.get("emails")
+    if not isinstance(emails, list) or not 0 < len(emails) <= MAX_INVITE_EMAILS:
+        return out + [violation("emails", "bad_emails")]
+    out += [violation(f"emails[{n}]", "bad_emails") for n, e in enumerate(emails)
+            if not (isinstance(e, str) and e.isascii() and INVITE_EMAIL.fullmatch(e))]
+    return out
+
+
 RULES = {Kind.CONTRIBUTION: _contributor, Kind.WITHDRAWAL: _contributor, Kind.PREREGISTRATION: _professional,
-         Kind.FINDING: _professional, Kind.FEEDBACK: _feedback}  # each kind's own rules, after its fields and text
+         Kind.FINDING: _professional, Kind.FEEDBACK: _feedback,
+         Kind.PROJECT_INVITE: _project_invite}  # each kind's own rules, after its fields and text
 
 
 def violations(doc: Any, sender: str = Sender.CONTRIBUTOR, professional_id: str | None = None) -> list[dict[str, str]]:

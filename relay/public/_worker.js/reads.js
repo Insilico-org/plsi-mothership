@@ -3,7 +3,7 @@
 import { fail, HEADERS, json } from './http.js';
 import { authenticate } from './tokens.js';
 
-const PUBLISHED = { catalog: 'pub:catalog', findings: 'pub:findings' };
+const PUBLISHED = { catalog: 'pub:catalog', findings: 'pub:findings', projects: 'pub:projects', gazette: 'pub:gazette' };
 const VERSION = /^[0-9A-Za-z._-]{1,64}$/;
 const releaseKey = (version) => `pub:release:${version}`;
 
@@ -21,9 +21,14 @@ async function requireScope(request, env, scope) {
 
 export async function publicRead(request, env, path) {
   if (path === '/public/catalog') return published(env, PUBLISHED.catalog);
+  if (path === '/public/gazette') return published(env, PUBLISHED.gazette);  // fully public browser feed; no scope
   if (path === '/public/findings') {
     const denied = env.PUBLIC_FINDINGS === '1' ? null : await requireScope(request, env, 'findings:read');
     return denied || published(env, PUBLISHED.findings);
+  }
+  if (path === '/public/projects') {
+    const denied = await requireScope(request, env, 'findings:read');  // researcher tier; reuse so existing tokens work
+    return denied || published(env, PUBLISHED.projects);
   }
   const m = path.match(/^\/public\/releases\/([^/]+)$/);
   if (!m) return fail('not_found', 404);
@@ -35,7 +40,7 @@ export async function publicRead(request, env, path) {
   return published(env, releaseKey(version));
 }
 
-// POST /admin/publish {what: catalog|release|findings, version?, body}; a release also moves `latest`.
+// POST /admin/publish {what: catalog|release|findings|projects|gazette, version?, body}; a release also moves `latest`.
 export async function publish(env, body) {
   const { what, version } = body;
   if (!body.body || typeof body.body !== 'object') return fail('bad_body', 400);

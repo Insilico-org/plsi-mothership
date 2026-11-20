@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="referrer" content="no-referrer" />
+  <title>Longevity Grok Gazette</title>
+  <link rel="stylesheet" href="/relay.css" />
+</head>
+<body class="gazette">
+  <h1>Longevity Grok Gazette</h1>
+  <p class="sub">A public browser of published longevity research projects. Pick MeSH tags to narrow the shelf.</p>
+  <div id="status" class="warn hidden"></div>
+  <div class="layout">
+    <aside id="sidebar" aria-label="MeSH tags">
+      <div class="side-head">
+        <span>Tags</span>
+        <button type="button" id="clear" class="hidden">Clear</button>
+      </div>
+      <div id="active" class="active-filter" aria-live="polite"></div>
+      <div id="tags"></div>
+    </aside>
+    <main id="feed" aria-live="polite"></main>
+  </div>
+  <script>
+    // Letter of tag.tree[0] -> MeSH category name (the ones we expect; anything else -> Other).
+    const CATEGORIES = {
+      A: 'Anatomy', B: 'Organisms', C: 'Diseases', D: 'Chemicals & Drugs',
+      E: 'Analytical/Diagnostic/Therapeutic Techniques', F: 'Psychiatry & Psychology',
+      G: 'Phenomena & Processes', H: 'Disciplines & Occupations', I: 'Anthropology & Social',
+      J: 'Technology & Food', K: 'Humanities', L: 'Information Science', M: 'Named Groups',
+      N: 'Health Care', V: 'Publication Characteristics', Z: 'Geographicals',
+    };
+    const selected = new Set();
+    let projects = [];
+
+    const el = (tag, cls, text) => {
+      const n = document.createElement(tag);
+      if (cls) n.className = cls;
+      if (text != null) n.textContent = text;  // text only; feed strings never become markup
+      return n;
+    };
+    const categoryOf = (tag) => {
+      const tree = Array.isArray(tag.tree) ? tag.tree : [];
+      const letter = tree.length && typeof tree[0] === 'string' && tree[0] ? tree[0][0].toUpperCase() : '';
+      return CATEGORIES[letter] || 'Other';
+    };
+    const tagKey = (tag) => (typeof tag.mesh === 'string' ? tag.mesh : '') + '\u0000' + (typeof tag.label === 'string' ? tag.label : '');
+
+    function tagsOf(project) {
+      const out = [];
+      const seen = new Set();
+      for (const t of Array.isArray(project.tags) ? project.tags : []) {
+        if (!t || typeof t !== 'object') continue;
+        const key = tagKey(t);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(t);
+      }
+      return out;
+    }
+
+    function render() {
+      const tagsBox = document.getElementById('tags');
+      const feed = document.getElementById('feed');
+      const active = document.getElementById('active');
+      const clear = document.getElementById('clear');
+      tagsBox.replaceChildren();
+      feed.replaceChildren();
+
+      // Count every distinct tag across all projects, grouped by category.
+      const counts = new Map();   // key -> {tag, count}
+      const byCat = new Map();    // category -> [key]
+      for (const p of projects) {
+        for (const t of tagsOf(p)) {
+          const key = tagKey(t);
+          if (!counts.has(key)) {
+            counts.set(key, { tag: t, count: 0 });
+            const cat = categoryOf(t);
+            if (!byCat.has(cat)) byCat.set(cat, []);
+            byCat.get(cat).push(key);
+          }
+          counts.get(key).count += 1;
+        }
+      }
+
+      for (const cat of [...byCat.keys()].sort()) {
+        const group = el('div', 'tag-group');
+        group.appendChild(el('h2', 'cat', cat));
+        for (const key of byCat.get(cat).sort((a, b) => (counts.get(a).tag.label || '').localeCompare(counts.get(b).tag.label || ''))) {
+          const { tag, count } = counts.get(key);
+          const btn = el('button', 'tag' + (selected.has(key) ? ' on' : ''));
+          btn.type = 'button';
+          btn.setAttribute('aria-pressed', selected.has(key) ? 'true' : 'false');
+          btn.appendChild(el('span', 'label', tag.label || tag.mesh || '(untitled tag)'));
+          btn.appendChild(el('span', 'count', String(count)));
+          btn.addEventListener('click', () => {
+            if (selected.has(key)) selected.delete(key); else selected.add(key);
+            render();
+          });
+          group.appendChild(btn);
+        }
+        tagsBox.appendChild(group);
+      }
+
+      clear.classList.toggle('hidden', selected.size === 0);
+
+      // A project shows only if it carries EVERY selected tag (AND).
+      const visible = projects.filter((p) => {
+        const keys = new Set(tagsOf(p).map(tagKey));
+        for (const sel of selected) if (!keys.has(sel)) return false;
+        return true;
+      });
+
+      active.replaceChildren();
+      if (selected.size) {
+        active.appendChild(el('span', 'af-label', 'Filtering by:'));
+        for (const sel of selected) {
+          const info = counts.get(sel);
+          active.appendChild(el('span', 'chip', info ? (info.tag.label || info.tag.mesh) : sel));
+        }
+      }
+      active.appendChild(el('span', 'af-count', visible.length + ' of ' + projects.length + ' project' + (projects.length === 1 ? '' : 's')));
+
+      if (!visible.length) {
+        feed.appendChild(el('p', 'empty', projects.length ? 'No project carries all the selected tags.' : 'No projects are published yet.'));
+        return;
+      }
+      for (const p of visible) feed.appendChild(card(p));
+    }
+
+    function card(p) {
+      const c = el('article', 'card');
+      c.appendChild(el('h3', 'title', typeof p.title === 'string' && p.title ? p.title : '(untitled project)'));
+      if (typeof p.published === 'string' && p.published) c.appendChild(el('p', 'meta', 'Published ' + p.published));
+      const chips = el('div', 'chips');
+      for (const t of tagsOf(p)) chips.appendChild(el('span', 'chip', t.label || t.mesh || ''));
+      c.appendChild(chips);
+      if (typeof p.publication_url === 'string' && /^https?:\/\//.test(p.publication_url)) {
+        const a = el('a', 'open', 'Open materials');
+        a.href = p.publication_url;
+        a.rel = 'noopener noreferrer';
+        a.target = '_blank';
+        c.appendChild(a);
+      }
+      return c;
+    }
+
+    function fail(text) {
+      const s = document.getElementById('status');
+      s.textContent = text;
+      s.classList.remove('hidden');
+    }
+
+    document.getElementById('clear').addEventListener('click', () => { selected.clear(); render(); });
+
+    (async () => {
+      try {
+        const res = await fetch('/public/gazette', { headers: { accept: 'application/json' } });
+        if (!res.ok) { fail('The gazette could not be loaded right now (' + res.status + ').'); return; }
+        const data = await res.json();  // treated as data only; nothing from it is ever executed
+        projects = Array.isArray(data.projects) ? data.projects.filter((p) => p && typeof p === 'object') : [];
+        render();
+      } catch (e) {
+        fail('The gazette could not be loaded right now. Check your connection and retry.');
+      }
+    })();
+  </script>
+</body>
+</html>

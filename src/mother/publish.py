@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from mother import audit, catalog, findings, net, release
+from mother import audit, catalog, findings, net, projects, release
 from mother.errors import UsageError
 from mother.store import Store
 from mother.vocab import Publication
@@ -22,6 +22,10 @@ def payload(store: Store, what: str, version: str | None = None) -> dict[str, An
         if not version:
             raise UsageError("publish release needs --version")
         return {"what": what.value, "version": version, "body": release.load(store, version)}
+    if what == Publication.PROJECTS:
+        return {"what": what.value, "body": projects.public(store)}
+    if what == Publication.GAZETTE:
+        return {"what": what.value, "body": projects.gazette_public(store)}
     return {"what": what.value, "body": findings.public(store)}
 
 
