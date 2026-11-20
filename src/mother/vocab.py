@@ -14,6 +14,19 @@ class Kind(StrEnum):
     PREREGISTRATION = "plsi_preregistration"
     FINDING = "plsi_finding"
     FEEDBACK = "plsi_feedback"
+    PROJECT_INVITE = "plsi_project_invite"
+
+
+class ProjectAction(StrEnum):
+    """What a project-access email does (WIRE §7): grow the team or shrink it."""
+    INVITE = "invite"
+    REVOKE = "revoke"
+
+
+class ProjectStatus(StrEnum):
+    """A published project's stage (WIRE §7): the private, invite-only workspace, then the public gazette."""
+    WORKSPACE = "workspace"
+    GAZETTE = "gazette"
 
 
 class Sender(StrEnum):
@@ -30,7 +43,7 @@ class Role(StrEnum):
 
 class Scope(StrEnum):
     RELEASES_READ = "releases:read"
-    FINDINGS_READ = "findings:read"
+    FINDINGS_READ = "findings:read"  # also gates /public/projects (the researcher table)
     FINDINGS_SUBMIT = "findings:submit"
 
 
@@ -190,6 +203,8 @@ class Publication(StrEnum):
     CATALOG = "catalog"
     RELEASE = "release"
     FINDINGS = "findings"
+    PROJECTS = "projects"
+    GAZETTE = "gazette"
 
 
 class FeedbackStage(StrEnum):

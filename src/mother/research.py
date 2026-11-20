@@ -16,7 +16,7 @@ import unicodedata
 from collections import defaultdict
 from typing import Any
 
-from mother import __version__, audit, bundle, clock, flags, gate, mail
+from mother import audit, bundle, clock, flags, gate, mail
 from mother.errors import GateFailed, NotFound, Refused
 from mother.store import Store, append_jsonl, new_receipt, read_json, read_jsonl, write_json
 from mother.vocab import DECIDED, Decision, NoteStatus, ResearchEntry, Sender, Verdict
@@ -28,6 +28,8 @@ SENDERS = "research/senders.json"  # address -> pseudonymous folder id; an addre
 CLAIM_CHARS = 160
 SUBJECT = "PLSI research note:"
 BEFORE_VERSION = (0, 2)  # the release of a file with no plsi_version: PLSI before 0.3.0 sent none
+OLDEST_PLSI = (0, 3)  # oldest PLSI release whose notes this Mothership accepts; raise ONLY when the note wire changes,
+#                       never on an ordinary Mother release, so a Mother bump never tells a current sender to update
 Log = dict[str, list[dict[str, Any]]]  # receipt -> its log entries, in order
 
 
@@ -155,11 +157,11 @@ def _outdated(text: str) -> str | None:
     if not isinstance(doc, dict):
         return None
     given = doc.get("plsi_version")
-    theirs, ours = BEFORE_VERSION if given is None else _release(given), _release(__version__)
-    if theirs is None or ours is None or theirs >= ours:
+    theirs = BEFORE_VERSION if given is None else _release(given)
+    if theirs is None or theirs >= OLDEST_PLSI:  # the floor is the note wire, not this Mother's release
         return None
-    shown, needed = "before 0.3.0" if given is None else given, f"{ours[0]}.{ours[1]}"
-    return (f"made by PLSI {shown}, older than this Mothership ({needed}): tell the sender to update PLSI to "
+    shown, needed = "before 0.3.0" if given is None else given, f"{OLDEST_PLSI[0]}.{OLDEST_PLSI[1]}"
+    return (f"made by PLSI {shown}, older than this Mothership accepts ({needed}): tell the sender to update PLSI to "
             f"{needed} or later and send the note again")
 
 

@@ -34,6 +34,9 @@ class Store(Protocol):
     def delete(self, path: str) -> bool: ...  # False: some of it only went to the backend's trash
     def exists(self, path: str) -> bool: ...
     def write_sheet(self, title: str, tabs: Tabs, colors: dict[str, str]) -> str: ...  # where the stewards open it
+    def link(self, path: str) -> str: ...  # the folder's shareable "anyone with the link: reader" URL
+    def grant(self, path: str, email: str, role: str) -> None: ...  # give `email` reader/writer on the folder
+    def revoke(self, path: str, email: str) -> None: ...  # drop `email`'s grant on the folder (no-op if none)
 
 
 def _parts(path: str) -> list[str]:
@@ -86,6 +89,38 @@ class LocalStore:
     def exists(self, path: str) -> bool:
         return self._path(path).exists()
 
+    GRANTS = "grants.json"  # a sidecar the Drive backend does in real Drive permissions; here so tests can assert
+
+    def link(self, path: str) -> str:
+        """Ensure the folder exists and hand back a stable local URL (the Drive backend shares it link-readable)."""
+        self._path(path).mkdir(parents=True, exist_ok=True)
+        return "local:/" + "/".join(_parts(path))
+
+    def _grants(self) -> tuple[Path, list[dict[str, str]]]:
+        p = self._path(self.GRANTS)
+        return p, (json.loads(p.read_text(encoding="utf-8")) if p.is_file() else [])
+
+    def _write_grants(self, p: Path, rows: list[dict[str, str]]) -> None:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_name(p.name + ".tmp")
+        tmp.write_text(json.dumps(rows, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
+        os.replace(tmp, p)
+
+    def grant(self, path: str, email: str, role: str) -> None:
+        """Record a reader/writer grant in the sidecar (Drive creates a real user permission)."""
+        p, rows = self._grants()
+        rows.append({"path": "/".join(_parts(path)), "email": email, "role": role})
+        self._write_grants(p, rows)
+
+    def revoke(self, path: str, email: str) -> None:
+        """Drop every grant of `email` on the folder from the sidecar (Drive deletes the user permission); a no-op
+        when there is none."""
+        p, rows = self._grants()
+        at, who = "/".join(_parts(path)), email.strip().lower()
+        kept = [r for r in rows if not (r["path"] == at and r["email"].strip().lower() == who)]
+        if len(kept) != len(rows):
+            self._write_grants(p, kept)
+
     def write_sheet(self, title: str, tabs: Tabs, colors: dict[str, str]) -> str:
         """One CSV per tab under <title>/, old tabs removed (colors are for a real sheet only)."""
         self.delete(title)
@@ -135,7 +170,9 @@ class DriveStore:
                                      hint="pip install -e <repo>[drive]") from None
         creds = service_account.Credentials.from_service_account_file(
             credentials, scopes=["https://www.googleapis.com/auth/drive"])
-        self.files = build("drive", "v3", credentials=creds, cache_discovery=False).files()
+        drive = build("drive", "v3", credentials=creds, cache_discovery=False)
+        self.files = drive.files()
+        self.permissions = drive.permissions()
         self.sheets = build("sheets", "v4", credentials=creds, cache_discovery=False).spreadsheets()
         self.drive = drive_id
         self.common = {"supportsAllDrives": True}
@@ -237,6 +274,30 @@ class DriveStore:
 
     def exists(self, path: str) -> bool:
         return bool(self._all(_parts(path)))
+
+    def link(self, path: str) -> str:
+        """Share the folder (made where missing) as "anyone with the link: reader" and return its webViewLink. A
+        project folder lives here for good, so its link and the viewers' access persist."""
+        folder = self._folder(_parts(path))
+        self.permissions.create(fileId=folder["id"], body={"type": "anyone", "role": "reader"},
+                                **self.common).execute()
+        return self.files.get(fileId=folder["id"], fields="webViewLink", **self.common).execute()["webViewLink"]
+
+    def grant(self, path: str, email: str, role: str) -> None:
+        """Give `email` reader or writer on the folder (made where missing); no notification email is sent."""
+        folder = self._folder(_parts(path))
+        self.permissions.create(fileId=folder["id"], body={"type": "user", "role": role, "emailAddress": email},
+                                sendNotificationEmail=False, **self.common).execute()
+
+    def revoke(self, path: str, email: str) -> None:
+        """Delete `email`'s user permission on the folder (made where missing); a no-op when the address holds none."""
+        folder = self._folder(_parts(path))
+        who = email.strip().lower()
+        perms = self.permissions.list(fileId=folder["id"], fields="permissions(id,emailAddress)",
+                                      **self.common).execute().get("permissions", [])
+        for perm in perms:
+            if (perm.get("emailAddress") or "").strip().lower() == who:
+                self.permissions.delete(fileId=folder["id"], permissionId=perm["id"], **self.common).execute()
 
     def write_sheet(self, title: str, tabs: Tabs, colors: dict[str, str]) -> str:
         """The Google Sheet `title` at the top of the drive, made once and rewritten tab by tab. Values go in RAW,
