@@ -26,7 +26,7 @@ test('issue then enroll; a reused code fails', async () => {
   const issued = await (await call(env, 'POST', '/join/issue', { body: { turnstileToken: 'join' } })).json();
   assert.equal(issued.ok, true);
   assert.match(issued.code, /^e1\.[^.]+\.\d+\.[^.]+$/);
-  assert.equal(issued.expires_in_sec, 900);
+  assert.equal(issued.expires_in_sec, 24 * 3600);
   assert.equal(calls.findLast((c) => c.url.includes('siteverify')).init.body.get('secret'), 'turnstile-secret');
 
   const res = await call(env, 'POST', '/enroll', { body: { code: issued.code } });

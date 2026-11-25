@@ -132,6 +132,7 @@
     function card(p) {
       const c = el('article', 'card');
       c.appendChild(el('h3', 'title', typeof p.title === 'string' && p.title ? p.title : '(untitled project)'));
+      if (typeof p.contributor === 'string' && p.contributor) c.appendChild(el('p', 'meta', 'Contributor: ' + p.contributor));
       if (typeof p.published === 'string' && p.published) c.appendChild(el('p', 'meta', 'Published ' + p.published));
       const chips = el('div', 'chips');
       for (const t of tagsOf(p)) chips.appendChild(el('span', 'chip', t.label || t.mesh || ''));

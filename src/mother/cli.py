@@ -107,6 +107,8 @@ COMMANDS: dict[str, tuple[Callable[[Store, argparse.Namespace], Any], str]] = { 
                         "the invite-only workspace is made; the team collaborates, then a steward runs mother project gazette"),
     "project gazette": (lambda s, a: projects.go_gazette(s, a.id),
                         "a steward runs mother publish gazette (and mother publish projects) to put it on the public gazette"),
+    "project withdraw": (lambda s, a: projects.withdraw(s, a.id),
+                         "run mother publish gazette and mother publish projects so the public pages drop it too"),
     "project invite": (lambda s, a: projects.intake(s, _bytes(a.eml)),
                        "the named addresses are given or, on a revoke, lose Drive writer on the project folder"),
     "project list": (lambda s, a: projects.listing(s), ""),
@@ -120,7 +122,7 @@ COMMANDS: dict[str, tuple[Callable[[Store, argparse.Namespace], Any], str]] = { 
 }
 CHANGES = frozenset({"intake", "notes decide", "research intake", "research review", "research decide",  # the dashboard
                      "research replied", "research tidy", "feedback intake", "findings review", "findings accept",
-                     "findings reject", "project publish", "project gazette", "project invite"})
+                     "findings reject", "project publish", "project gazette", "project withdraw", "project invite"})
 assert CHANGES <= COMMANDS.keys(), "a dashboard command that is not a command"
 
 
@@ -196,6 +198,8 @@ def build_parser() -> argparse.ArgumentParser:
     _add(pr.add_parser("publish", help="publish an accepted note's project into a stable shareable folder (WIRE §7)"), "receipt")
     _add(pr.add_parser("gazette", help="approve a workspace project and take its publication/ subfolder to the public "
                                        "gazette (WIRE §7)"), "id")
+    _add(pr.add_parser("withdraw", help="take a gazette project back to private: end its public share and unlist it, "
+                                        "when its contributor withdraws their yes"), "id")
     _add(pr.add_parser("invite", help="an owner's project-access email (invite or revoke): grant or remove the named "
                                       "addresses' Drive writer"), "eml")
     pr.add_parser("list", help="every published project (no addresses)")

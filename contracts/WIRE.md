@@ -178,6 +178,7 @@ release sends the same value.
 | `bad_context` | a research-note context field (§3) of the wrong shape or length, or a finding whose `source` is not one of the item's `sources` |
 | `bad_files` | a research note's `files` that is not 1-20 entries of `{name, sha256[, drive_id]}` in the forms of §3, or repeats a name |
 | `bad_project` | a research note's `project` that is not an object with `id` (a lowercase uuid) and `title` (1-300 characters) (§7) |
+| `bad_credit` | a research note's `credit` that is not an object with `publish` (true or false) and an optional `contributor` (1-300 characters) (§7) |
 | `formula` | a file cell that starts with `=`, `+`, `-` or `@` and is not a number (a spreadsheet formula) |
 | `embedded_data` | any text holding a `data:` URI, or a run of 120 or more base64 characters that mixes lower case, upper case and digits (a DNA or protein sequence or a hex hash does not): a picture or file hidden in text |
 | `professional_mismatch`, `bad_release`, `bad_spec`, `bad_alpha`, `bad_direction`, `bad_parents`, `bad_result` | professional rules above and §5 |
@@ -364,6 +365,15 @@ that keeps irresponsible research off the Mothership. There is no anonymous rese
   decision entry of `research/log.jsonl` (and so `research decide` and `research unreplied`) and the digest;
   `mother research list --project <id>` lists that project's notes only. The outcome reply has a line `Project:
   <title>`. A project groups one sender's notes; it gives no other sender any access.
+- **Credit:** a note of a project may carry a top-level `credit` {`publish`[, `contributor`]}: `publish` is the
+  contributor's own yes (`true`) or no (`false`) to showing the project in the public Gazette, and `contributor` the
+  name shown beside it there (1-300 characters with every string rule); otherwise `bad_credit`, and any other key in it
+  is `unknown_field`. `mother project gazette` reads the `credit` of the project's newest accepted note that carries
+  one (by `received_at`), so a later note changes the answer; without `publish: true` it refuses (`NO_CONSENT`).
+  The gazette row shows `contributor`, or `null` for no name; the researcher table never does.
+  When the contributor withdraws their yes, `mother project withdraw --id <id>` ends the public share of
+  `publication/`, drops the link, tags and name, and returns the project to `workspace` (`NOT_PUBLIC` if it is not in
+  the gazette); the next `mother publish gazette` and `mother publish projects` remove it from the public pages.
 - **Intake** (`mother research intake --eml <file> [--attachment <file>] [--bundle <file>]`): the bot saves the raw
   email as received (and its `.json` and `.zip` attachments, when the saved email does not hold them); code parses the `From`
   address (exactly one `From` header without parse defects, holding one ASCII addr-spec whose domain is a host name

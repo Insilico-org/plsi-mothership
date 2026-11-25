@@ -58,23 +58,37 @@ def _summary(entry: dict[str, Any]) -> dict[str, Any]:
             "link": entry.get("publication_url")}
 
 
-def _accepted_tags(store: Store, project_id: str) -> list[dict[str, Any]]:
-    """The deduped MeSH tags of the project's accepted note, found by scanning research/accepted/ for the note whose
-    project.id is this project (each tag {mesh, label, tree}, first occurrence kept, distinct by mesh id)."""
-    seen: set[str] = set()
-    tags: list[dict[str, Any]] = []
+def _accepted(store: Store, project_id: str) -> list[tuple[str, dict[str, Any]]]:
+    """(folder, note) of every accepted research note of this project, oldest received first."""
+    found = []
     for path in store.list(ACCEPTED):
         if not path.endswith("/note.json"):
             continue
         note = json.loads(store.read(path))
-        if (note.get("project") or {}).get("id") != project_id:
-            continue
+        if (note.get("project") or {}).get("id") == project_id:
+            at = path.removesuffix("/note.json")
+            found.append((read_json(store, f"{at}/sender.json", {}).get("received_at") or "", at, note))
+    return [(at, note) for _, at, note in sorted(found, key=lambda f: (f[0], f[1]))]
+
+
+def _accepted_tags(notes: list[tuple[str, dict[str, Any]]]) -> list[dict[str, Any]]:
+    """The deduped MeSH tags of the project's accepted notes (each tag {mesh, label, tree}, first occurrence kept,
+    distinct by mesh id)."""
+    seen: set[str] = set()
+    tags: list[dict[str, Any]] = []
+    for _, note in notes:
         for item in note.get("items") or []:
             for tag in item.get("tags") or []:
                 if tag["mesh"] not in seen:
                     seen.add(tag["mesh"])
                     tags.append({"mesh": tag["mesh"], "label": tag["label"], "tree": tag["tree"]})
     return tags
+
+
+def _credit(notes: list[tuple[str, dict[str, Any]]]) -> dict[str, Any]:
+    """The contributor's own answer for the Gazette: the `credit` of the newest accepted note that carries one, so a
+    later note changes it; none says no."""
+    return next((note["credit"] for _, note in reversed(notes) if isinstance(note.get("credit"), dict)), {})
 
 
 def create_project(store: Store, receipt: str) -> dict[str, Any]:
@@ -105,19 +119,42 @@ def create_project(store: Store, receipt: str) -> dict[str, Any]:
 def go_gazette(store: Store, project_id: str) -> dict[str, Any]:
     """The GAZETTE stage: a steward approves and takes the project public. Only projects/<id>/publication/ is ever
     public-shared (never the working dir); the MeSH tags of the accepted note are aggregated and the status becomes
-    gazette. Refused if the team has not created the publication/ subfolder yet."""
+    gazette, with the contributor's name when their credit gave one. Refused if the team has not created the publication/
+    subfolder yet (NO_PUBLICATION), or the newest accepted note's credit is not publish: true (NO_CONSENT)."""
     _entry(store, project_id)
     publication = _publication(project_id)
     if not store.exists(publication):
         raise Refused("the project has no publication/ subfolder to present yet", code="NO_PUBLICATION",
                       hint="the team adds projects/<id>/publication/ with what to show, then run this again")
+    notes = _accepted(store, project_id)
+    credit = _credit(notes)
+    if credit.get("publish") is not True:
+        raise Refused("the contributor has not agreed to show this project in the Gazette", code="NO_CONSENT",
+                      hint="the contributor sends a new note of the project with credit {\"publish\": true}; accept it, then run this again")
     index = _load(store)
     entry = index[project_id]
     entry["publication_url"] = store.link(publication)  # ONLY the publication subfolder is public-shared
-    entry["tags"] = _accepted_tags(store, project_id)
+    entry["tags"] = _accepted_tags(notes)
+    entry["contributor"] = credit.get("contributor")  # the name the contributor chose to show; None shows no name
     entry["status"] = ProjectStatus.GAZETTE.value
     _save(store, index)
     audit.record(store, "project_gazette", project_id)
+    return _summary(entry)
+
+
+def withdraw(store: Store, project_id: str) -> dict[str, Any]:
+    """Take a gazette project back to its private WORKSPACE stage, when its contributor withdraws their yes or asks
+    to be unlisted: the publication/ subfolder's public share ends, and the public link, MeSH tags and name are
+    dropped from the registry. Nothing is deleted; the team keeps the folder and its access."""
+    entry = _entry(store, project_id)
+    if entry["status"] != ProjectStatus.GAZETTE:
+        raise Refused("the project is not in the gazette", code="NOT_PUBLIC", hint="mother project status --id <id>")
+    store.unlink(_publication(project_id))
+    index = _load(store)
+    entry = index[project_id]
+    entry.update(status=ProjectStatus.WORKSPACE.value, publication_url=None, tags=[], contributor=None)
+    _save(store, index)
+    audit.record(store, "project_withdraw", project_id)
     return _summary(entry)
 
 
@@ -204,6 +241,6 @@ def gazette_public(store: Store) -> dict[str, Any]:
     """The fully public gazette (WIRE §7): each gazette-stage project with its MeSH tags and the publication link, for
     the booru-style browser. Built only from the registry; never an address, never the invitee list."""
     projects = [{"project_id": e["project_id"], "title": e["title"], "publication_url": e["publication_url"],
-                 "published": e["created"], "tags": e.get("tags") or []}
+                 "published": e["created"], "tags": e.get("tags") or [], "contributor": e.get("contributor")}
                 for e in _gazette_rows(store)]
     return {"built": clock.month(), "projects": projects}
