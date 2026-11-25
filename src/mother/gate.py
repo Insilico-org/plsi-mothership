@@ -25,7 +25,7 @@ MAX_KEY = 64
 FIELDS = {  # kind -> (required, optional) body fields beyond kind and schema_version
     Kind.CONTRIBUTION: ({"contributor_id", "consent_version", "packed", "kinds", "subject"}, set(ContributionKind)),
     Kind.WITHDRAWAL: ({"contributor_id", "request"}, {"proof"}),
-    Kind.RESEARCH_NOTE: ({"items", "method"}, {"report", "files", "project"}),
+    Kind.RESEARCH_NOTE: ({"items", "method"}, {"report", "files", "project", "credit"}),
     Kind.REGISTRY_UPDATE: ({"items"}, set()),
     Kind.PREREGISTRATION: ({"professional_id", "preregistration_id", "hypothesis", "release", "analysis", "outcome",
                             "alpha", "direction", "parents"}, set()),
@@ -224,6 +224,7 @@ def _fields(doc: dict[str, Any], kind: Kind) -> list[dict[str, str]]:
         if kind == Kind.RESEARCH_NOTE:
             out += note.check(items, doc.get("report")) + note.files(doc)
             out += _unknown(doc.get("project"), note.PROJECT, "project") + note.project(doc)
+            out += _unknown(doc.get("credit"), note.CREDIT, "credit") + note.credit(doc)
     return out
 
 

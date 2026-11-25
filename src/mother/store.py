@@ -37,6 +37,7 @@ class Store(Protocol):
     def link(self, path: str) -> str: ...  # the folder's shareable "anyone with the link: reader" URL
     def grant(self, path: str, email: str, role: str) -> None: ...  # give `email` reader/writer on the folder
     def revoke(self, path: str, email: str) -> None: ...  # drop `email`'s grant on the folder (no-op if none)
+    def unlink(self, path: str) -> None: ...  # end the folder's "anyone with the link" share (no-op if none)
 
 
 def _parts(path: str) -> list[str]:
@@ -111,6 +112,9 @@ class LocalStore:
         p, rows = self._grants()
         rows.append({"path": "/".join(_parts(path)), "email": email, "role": role})
         self._write_grants(p, rows)
+
+    def unlink(self, path: str) -> None:
+        """End the folder's public share; a local folder has none to end (Drive deletes the "anyone" permission)."""
 
     def revoke(self, path: str, email: str) -> None:
         """Drop every grant of `email` on the folder from the sidecar (Drive deletes the user permission); a no-op
@@ -288,6 +292,16 @@ class DriveStore:
         folder = self._folder(_parts(path))
         self.permissions.create(fileId=folder["id"], body={"type": "user", "role": role, "emailAddress": email},
                                 sendNotificationEmail=False, **self.common).execute()
+
+    def unlink(self, path: str) -> None:
+        """Delete the folder's "anyone with the link" permission, so its link opens for nobody outside the drive; a
+        no-op when it holds none."""
+        folder = self._folder(_parts(path))
+        perms = self.permissions.list(fileId=folder["id"], fields="permissions(id,type)",
+                                      **self.common).execute().get("permissions", [])
+        for perm in perms:
+            if perm.get("type") == "anyone":
+                self.permissions.delete(fileId=folder["id"], permissionId=perm["id"], **self.common).execute()
 
     def revoke(self, path: str, email: str) -> None:
         """Delete `email`'s user permission on the folder (made where missing); a no-op when the address holds none."""

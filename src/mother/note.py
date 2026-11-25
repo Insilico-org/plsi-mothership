@@ -33,7 +33,8 @@ MODEL_FIELDS = frozenset({"model", "finding"})
 TAG_FIELDS = frozenset({"mesh", "label", "tree"})
 FILE_FIELDS = frozenset({"name", "sha256", "drive_id"})
 PROJECT = frozenset({"id", "title"})
-NAMES = CITED_FIELDS | MODEL_FIELDS | TAG_FIELDS | FILE_FIELDS | PROJECT
+CREDIT = frozenset({"publish", "contributor"})  # the contributor's yes to the Gazette, and the name shown
+NAMES = CITED_FIELDS | MODEL_FIELDS | TAG_FIELDS | FILE_FIELDS | PROJECT | CREDIT
 # an item's tags: 1-MAX_TAGS MeSH descriptors that PLSI resolved against NLM, checked here by form only
 MAX_TAGS = 5
 MESH = re.compile(r"D\d{6}(?:\d{3})?")
@@ -82,6 +83,17 @@ def project(doc: dict[str, Any]) -> list[dict[str, str]]:
     given = doc["project"]
     ok = isinstance(given, dict) and fits(UUID, given.get("id")) and short_text(given.get("title"))
     return [] if ok else [violation("project", "bad_project")]
+
+
+def credit(doc: dict[str, Any]) -> list[dict[str, str]]:
+    """`bad_credit` for a `credit` that is not an object with `publish` (true or false: the contributor's own yes to
+    the public Gazette) and an optional `contributor` (the name shown, 1-300 characters); other keys are the gate's
+    `unknown_field`."""
+    if "credit" not in doc:
+        return []
+    given = doc["credit"]
+    ok = isinstance(given, dict) and isinstance(given.get("publish"), bool)         and ("contributor" not in given or short_text(given["contributor"]))
+    return [] if ok else [violation("credit", "bad_credit")]
 
 
 def by_email(doc: dict[str, Any]) -> list[tuple[int, dict[str, str]]]:
