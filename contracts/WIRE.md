@@ -188,7 +188,7 @@ release sends the same value.
 | Method, path | Auth | Behaviour |
 |---|---|---|
 | GET `/join` * | none | join page; Turnstile **always** required. Missing site key → page says misconfigured |
-| POST `/join/issue` * | Turnstile (action `join`) | one-time enroll code `e1.<nonce>.<exp>.<sig>`, 900 s |
+| POST `/join/issue` * | Turnstile (action `join`) | one-time enroll code `e1.<nonce>.<exp>.<sig>`, 24 h |
 | POST `/enroll` * | code | `{ok, install_id, token}` (unchanged) |
 | POST `/relay` | Bearer install or professional token | parse JSON (≤ 256 KiB). Kind must be allowed for the token type and scope (§3), else 403 `kind_not_allowed` (always for `plsi_research_note`). Park `{body, sender: contributor\|professional, professional_id?, role?}` (the body as sent; pid and role from a professional token) in KV as `body:<ref>` (random UUID, TTL 1 day), then POST `{kind: "relay_ref", schema_version, ref, sha256, bytes}` (of the body) to `MOTHERSHIP_WEBHOOK_URL` with `authorization: Bearer <MOTHERSHIP_SENDER_KEY>` and no other header: Grok Bot wakes show only ~4 KiB of a webhook body and the caller gets only Grok's run id. **Never** store or forward `install_id`. A 2xx webhook reply → 202 `{ok: true, ticket}` (`ticket` = `ref`); any other → 502 `upstream_error` with no upstream text, and the parked body is dropped |
 | GET `/public/catalog` | none | KV `pub:catalog` (JSON) or 404 `not_published` |
